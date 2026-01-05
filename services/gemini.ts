@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { NewsItem, DurationOption } from "../types";
 
 // Helper to get a fresh instance
@@ -30,14 +30,14 @@ export async function fetchDailyNews(): Promise<NewsItem[]> {
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json",
         responseSchema: {
-            type: "ARRAY",
+            type: Type.ARRAY,
             items: {
-                type: "OBJECT",
+                type: Type.OBJECT,
                 properties: {
-                    headline: { type: "STRING" },
-                    summary: { type: "STRING" },
-                    category: { type: "STRING" },
-                    date: { type: "STRING" }
+                    headline: { type: Type.STRING },
+                    summary: { type: Type.STRING },
+                    category: { type: Type.STRING },
+                    date: { type: Type.STRING }
                 }
             }
         }
