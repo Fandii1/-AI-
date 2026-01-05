@@ -1,5 +1,5 @@
-import React from 'react';
-import { FileText, Sparkles, Quote } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileText, Sparkles, Copy, Check } from 'lucide-react';
 import { AppStatus } from '../types';
 
 interface BriefingViewProps {
@@ -11,8 +11,60 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
   status, 
   summary, 
 }) => {
-  
+  const [copied, setCopied] = useState(false);
   const isAnalyzing = status === AppStatus.ANALYZING;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(summary);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Basic Markdown-to-JSX renderer (lightweight)
+  const renderMarkdown = (text: string) => {
+    if (!text) return null;
+    
+    // Split by newlines to handle paragraphs
+    return text.split('\n').map((line, index) => {
+      // Headers (##)
+      if (line.startsWith('## ')) {
+        return <h2 key={index} className="text-xl font-bold text-slate-800 mt-6 mb-3 border-l-4 border-blue-500 pl-3">{line.replace('## ', '')}</h2>;
+      }
+      if (line.startsWith('### ')) {
+        return <h3 key={index} className="text-lg font-bold text-slate-700 mt-4 mb-2">{line.replace('### ', '')}</h3>;
+      }
+      if (line.startsWith('- ') || line.startsWith('* ')) {
+          const content = line.substring(2);
+          // Handle bolding within list items
+          const parts = content.split(/(\*\*.*?\*\*)/g);
+          return (
+              <li key={index} className="ml-4 list-disc text-slate-700 mb-1">
+                 {parts.map((part, i) => {
+                     if (part.startsWith('**') && part.endsWith('**')) {
+                         return <strong key={i} className="text-slate-900 font-semibold">{part.slice(2, -2)}</strong>;
+                     }
+                     return part;
+                 })}
+              </li>
+          );
+      }
+      
+      // Regular paragraphs with Bold support
+      if (line.trim() === '') return <br key={index} />;
+      
+      const parts = line.split(/(\*\*.*?\*\*)/g);
+      return (
+        <p key={index} className="mb-3 text-slate-700 leading-relaxed">
+          {parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+              return <strong key={i} className="text-slate-900 font-semibold bg-slate-100 px-1 rounded">{part.slice(2, -2)}</strong>;
+            }
+            return part;
+          })}
+        </p>
+      );
+    });
+  };
 
   // Idle state design for top layout
   if (status === AppStatus.IDLE || status === AppStatus.FETCHING_NEWS) {
@@ -25,10 +77,10 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                       <Sparkles className="w-8 h-8" />
                   </div>
                   <h3 className="text-xl md:text-2xl font-bold text-slate-800 mb-3">
-                      今日 AI 简报准备中
+                      AI 智能新闻分析师
                   </h3>
                   <p className="text-slate-500 max-w-md mx-auto leading-relaxed">
-                     点击右上角的“生成简报”按钮，AI 将为您聚合分析全球热点，生成专属的早安简报。
+                     点击右上角的“生成简报”按钮，AI 将为您聚合分析国内外热点，并生成深度洞察报告。
                   </p>
               </div>
           </div>
@@ -39,47 +91,60 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
     <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden ring-1 ring-slate-900/5 transition-all duration-500">
       
       {/* Header Section */}
-      <div className="bg-slate-50/80 backdrop-blur p-6 border-b border-slate-100 flex items-center justify-between">
+      <div className="bg-slate-50/80 backdrop-blur p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 z-20">
           <div className="flex items-center gap-3">
              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
                  <FileText className="w-5 h-5" />
              </div>
              <div>
-                 <h3 className="font-bold text-slate-900 text-lg">智能简报核心</h3>
-                 <p className="text-xs text-slate-500 font-medium">AI Generated Insight</p>
+                 <h3 className="font-bold text-slate-900 text-lg">AI 深度简报</h3>
+                 <p className="text-xs text-slate-500 font-medium">Deep Insight Report</p>
              </div>
           </div>
           
-          {status === AppStatus.READY && (
-             <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold flex items-center">
-                <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-                Analysis Complete
-             </span>
-          )}
+          <div className="flex items-center gap-2">
+            {status === AppStatus.READY && (
+                <>
+                <button 
+                    onClick={handleCopy}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
+                    title="复制全文"
+                >
+                    {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? '已复制' : '复制'}
+                </button>
+                <span className="hidden md:flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold items-center">
+                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                    分析完成
+                </span>
+                </>
+            )}
+          </div>
       </div>
 
-      {/* Script Content */}
+      {/* Content */}
       <div className="p-6 md:p-10 bg-white">
         {isAnalyzing ? (
-            <div className="space-y-6 animate-pulse max-w-4xl mx-auto">
-                <div className="h-4 bg-slate-100 rounded w-1/3 mb-8"></div>
-                <div className="space-y-4">
+            <div className="space-y-8 animate-pulse max-w-4xl mx-auto">
+                <div className="flex items-center space-x-4">
+                     <div className="h-6 bg-slate-100 rounded w-48"></div>
+                </div>
+                <div className="space-y-3">
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-5/6"></div>
                 </div>
-                <div className="space-y-4 pt-4">
+                <div className="space-y-3 pt-4">
+                     <div className="h-5 bg-slate-100 rounded w-32 mb-4"></div>
+                    <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-4/5"></div>
                 </div>
             </div>
         ) : (
-            <div className="relative max-w-4xl mx-auto">
-                <Quote className="absolute -left-8 -top-4 w-12 h-12 text-slate-100 -z-10" />
+            <div className="max-w-4xl mx-auto">
                 <article className="prose prose-slate prose-lg max-w-none">
-                    <div className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium font-serif">
-                        {summary}
-                    </div>
+                    {renderMarkdown(summary)}
                 </article>
             </div>
         )}
