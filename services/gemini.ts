@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { NewsItem, DurationOption, AppSettings } from "../types";
+import { NewsItem, NovelItem, NovelDetail, NovelChapter, DurationOption, AppSettings } from "../types";
 
 // --- Generic Helpers ---
 
@@ -204,4 +204,203 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
     console.error("Briefing Gen Error:", error);
     throw error;
   }
+}
+
+// 3. Fetch Popular Novels
+export async function fetchPopularNovels(settings: AppSettings, genre: string): Promise<NovelItem[]> {
+    let genreInstruction = "";
+    if (genre === '免费') {
+        genreInstruction = "当前全网最热门的免费网络小说（重点关注番茄、七猫等免费阅读平台的高分榜单）";
+    } else if (genre === '全部' || genre === '综合') {
+        genreInstruction = "各类热门网络小说";
+    } else if (genre === '收藏') {
+        return []; // Managed by local state, not fetched
+    } else {
+        genreInstruction = `"${genre}" 类型的热门网络小说`;
+    }
+
+    const prompt = `
+      请利用搜索引擎查找${genreInstruction}。
+      
+      请列出 6-10 本推荐小说。
+      
+      对于每本小说，请提供以下信息：
+      - title: 书名
+      - author: 作者
+      - description: 简短的剧情介绍（50字以内）
+      - genre: 具体流派（如玄幻、言情、科幻、悬疑等）
+      - status: 连载 或 完结
+      - platform: 首发平台（如起点中文网、晋江文学城、番茄小说等，如果不知道填未知）
+      - rating: 评分（如 9.2，如果不知道填 -）
+
+      【重要】输出格式要求：
+      请直接返回一个纯 JSON 数组字符串，不要包含任何 Markdown 标记（如 \`\`\`json），也不要包含其他解释性文字。
+      格式示例：
+      [
+        { "title": "...", "author": "...", "description": "...", "genre": "...", "status": "连载", "platform": "...", "rating": "..." },
+        ...
+      ]
+    `;
+
+    let text = "";
+    try {
+        if (settings.provider === 'gemini') {
+            const ai = getGeminiClient(settings.apiKey);
+            const response = await ai.models.generateContent({
+                model: settings.model || 'gemini-2.0-flash',
+                contents: prompt,
+                config: {
+                    tools: [{ googleSearch: {} }],
+                },
+            });
+            text = response.text || "[]";
+        } else {
+            const messages = [
+                { role: "system", content: "You are a helpful book recommendation assistant. Output only raw JSON." },
+                { role: "user", content: prompt }
+            ];
+            text = await callOpenAICompatible(settings, messages, 'text');
+        }
+
+        // Parse JSON
+        let novelItems: NovelItem[] = [];
+        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const startIndex = jsonStr.indexOf('[');
+        const endIndex = jsonStr.lastIndexOf(']');
+
+        if (startIndex !== -1 && endIndex !== -1) {
+            const cleanJson = jsonStr.substring(startIndex, endIndex + 1);
+            const parsed = JSON.parse(cleanJson);
+            novelItems = parsed.map((item: any) => ({
+                title: item.title || "未知书名",
+                author: item.author || "佚名",
+                description: item.description || "暂无介绍",
+                genre: item.genre || genre,
+                status: item.status || "Unknown",
+                platform: item.platform || "Unknown",
+                rating: item.rating || "-"
+            }));
+        }
+        return novelItems;
+
+    } catch (error) {
+        console.error("Novel Fetch Error:", error);
+        throw error;
+    }
+}
+
+// 4. Fetch Novel Detail & Chapter List
+export async function fetchNovelDetail(settings: AppSettings, novel: NovelItem): Promise<NovelDetail> {
+    const prompt = `
+      关于小说《${novel.title}》（作者：${novel.author}）：
+      
+      任务：
+      1. longSummary: 提供一个详细的故事大纲（约300字）。
+      2. characters: 列出 3-5 个主要角色，包含姓名(name)、角色定位(role)、简短描述(description)。
+      3. aiRetelling: 基于你对本书的了解，生成一段精彩的开篇导读（约500字）。
+      4. chapters: 【极其重要】请尽可能完整地列出该小说的所有章节目录。如果小说非常长，请至少列出前 100 章的标题。必须严格按照 { "index": number, "title": string } 的格式。
+      
+      【重要】输出格式要求：
+      请直接返回一个纯 JSON 对象，不要包含任何 Markdown 标记（如 \`\`\`json）。
+      chapters 字段必须是一个数组，包含大量章节。
+      
+      格式示例：
+      {
+        "longSummary": "...",
+        "characters": [{ "name": "...", "role": "主角", "description": "..." }],
+        "aiRetelling": "...",
+        "chapters": [{ "index": 1, "title": "第一章 风起" }, { "index": 2, "title": "第二章 云涌" }, ...更多章节]
+      }
+    `;
+
+    let text = "";
+    let groundingChunks: any[] = [];
+
+    try {
+        if (settings.provider === 'gemini') {
+            const ai = getGeminiClient(settings.apiKey);
+            const response = await ai.models.generateContent({
+                model: settings.model || 'gemini-2.0-flash',
+                contents: prompt,
+                config: {
+                    tools: [{ googleSearch: {} }],
+                },
+            });
+            text = response.text || "{}";
+            groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        } else {
+            const messages = [
+                { role: "system", content: "You are a literary expert AI. Output raw JSON." },
+                { role: "user", content: prompt }
+            ];
+            text = await callOpenAICompatible(settings, messages, 'json_object');
+        }
+
+        // Parse JSON
+        let detail: Partial<NovelDetail> = {};
+        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const startIndex = jsonStr.indexOf('{');
+        const endIndex = jsonStr.lastIndexOf('}');
+
+        if (startIndex !== -1 && endIndex !== -1) {
+            const cleanJson = jsonStr.substring(startIndex, endIndex + 1);
+            detail = JSON.parse(cleanJson);
+        }
+
+        const validSources = groundingChunks
+            .filter((c: any) => c.web?.uri && c.web?.title)
+            .map((c: any) => ({ title: c.web.title, uri: c.web.uri }));
+
+        return {
+            ...novel,
+            longSummary: detail.longSummary || novel.description,
+            characters: detail.characters || [],
+            aiRetelling: detail.aiRetelling || "AI 暂时无法生成试读内容。",
+            readingLinks: validSources,
+            chapters: detail.chapters || []
+        };
+
+    } catch (error) {
+        console.error("Novel Detail Error:", error);
+        throw error;
+    }
+}
+
+// 5. Fetch Chapter Content (Simulate Crawling)
+export async function fetchChapterContent(settings: AppSettings, novelTitle: string, author: string, chapterTitle: string): Promise<string> {
+    const prompt = `
+      请帮我查找小说《${novelTitle}》（作者：${author}）中章节“${chapterTitle}”的具体正文内容。
+      
+      要求：
+      1. 利用搜索工具尽可能找到该章节的原文内容。
+      2. 如果是免费公开章节，请直接返回完整的正文内容。
+      3. 如果无法找到完整原文或原文受版权保护无法展示，请尽可能详细地复述该章节发生的具体剧情，字数不少于 800 字，风格贴近原著。
+      4. 只返回正文内容，不要包含“好的”、“以下是内容”等客套话。
+      5. 进行适当的排版，段落之间留空行。
+    `;
+
+    let text = "";
+    try {
+        if (settings.provider === 'gemini') {
+            const ai = getGeminiClient(settings.apiKey);
+            const response = await ai.models.generateContent({
+                model: settings.model || 'gemini-2.0-flash',
+                contents: prompt,
+                config: {
+                    tools: [{ googleSearch: {} }],
+                },
+            });
+            text = response.text || "获取章节内容失败，请稍后重试。";
+        } else {
+            const messages = [
+                { role: "system", content: "You are a reading assistant." },
+                { role: "user", content: prompt }
+            ];
+            text = await callOpenAICompatible(settings, messages, 'text');
+        }
+        return text;
+    } catch (error) {
+        console.error("Chapter Content Error:", error);
+        throw new Error("章节内容获取失败");
+    }
 }
