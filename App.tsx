@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Radio, Key, CheckCircle2, Mic } from 'lucide-react';
-import { fetchDailyNews, generateNewsBriefing, generateSpeech } from './services/gemini';
+import { Sparkles, Loader2, Newspaper, Key, CheckCircle2 } from 'lucide-react';
+import { fetchDailyNews, generateNewsBriefing } from './services/gemini';
 import { NewsItem, AppStatus, DurationOption } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
 import { BriefingView } from './components/BriefingView';
@@ -9,17 +9,18 @@ function App() {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [summaryText, setSummaryText] = useState<string>("");
-  const [audioData, setAudioData] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [duration, setDuration] = useState<DurationOption>('medium');
   const [hasApiKey, setHasApiKey] = useState(false);
 
   useEffect(() => {
     const checkKey = async () => {
-      if (process.env.API_KEY) {
+      // Check if Env var is present (via Vite define)
+      if (process.env.API_KEY && process.env.API_KEY.length > 0) {
         setHasApiKey(true);
         return;
       }
+      // Check if user selected key via AI Studio overlay
       if ((window as any).aistudio?.hasSelectedApiKey) {
         const has = await (window as any).aistudio.hasSelectedApiKey();
         setHasApiKey(has);
@@ -54,15 +55,20 @@ function App() {
       setErrorMsg(null);
       setNews([]);
       setSummaryText("");
-      setAudioData(null);
       
       // Step 1: Fetch News
       setStatus(AppStatus.FETCHING_NEWS);
+      
+      // Double check key existence before calling
+      if (!process.env.API_KEY && !(window as any).aistudio?.hasSelectedApiKey) {
+          throw new Error("API Key missing. Please select a key or configure environment variables.");
+      }
+
       const newsItems = await fetchDailyNews();
       setNews(newsItems);
 
       if (newsItems.length === 0) {
-          throw new Error("未找到相关新闻，请重试。");
+          throw new Error("未找到相关新闻，或解析失败，请重试。");
       }
 
       // Step 2: Generate Summary (Briefing)
@@ -70,25 +76,22 @@ function App() {
       const text = await generateNewsBriefing(newsItems, duration);
       setSummaryText(text);
 
-      // Step 3: Generate Audio Podcast
-      setStatus(AppStatus.GENERATING_AUDIO);
-      const audio = await generateSpeech(text);
-      setAudioData(audio);
-
       setStatus(AppStatus.READY);
 
     } catch (err: any) {
       console.error(err);
-      const msg = err.message || "";
+      const msg = err.message || JSON.stringify(err);
       let userMsg = "出错了，请稍后重试。";
       
       if (msg.includes("API key") || msg.includes("403") || msg.includes("UNAUTHENTICATED")) {
-         userMsg = "API Key 无效或未设置。请检查环境变量。";
+         userMsg = "API Key 无效或未设置。请点击右上角 'Set Key' 或检查环境变量。";
          if (!process.env.API_KEY) {
              setHasApiKey(false);
          }
+      } else if (msg.includes("500") || msg.includes("Internal Server Error")) {
+          userMsg = "AI 服务暂时繁忙 (500)，请稍后重试。";
       } else {
-         userMsg = `出错了: ${msg}`;
+         userMsg = `出错了: ${msg.substring(0, 100)}`;
       }
       
       setErrorMsg(userMsg);
@@ -104,7 +107,7 @@ function App() {
           <div className="max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-3">
                 <div className="bg-blue-600 p-2 rounded-lg text-white shadow-lg shadow-blue-500/30">
-                  <Radio className="w-5 h-5" />
+                  <Newspaper className="w-5 h-5" />
                 </div>
                 <h1 className="text-xl font-bold tracking-tight text-slate-900 hidden md:block">
                     早安 AI 简报
@@ -153,14 +156,13 @@ function App() {
                    {status === AppStatus.IDLE || status === AppStatus.READY || status === AppStatus.ERROR ? (
                        <>
                          <Sparkles className="w-4 h-4 mr-2 text-yellow-400" />
-                         生成播客
+                         生成简报
                        </>
                    ) : (
                        <>
                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                          {status === AppStatus.FETCHING_NEWS && "搜索热点..."}
                          {status === AppStatus.ANALYZING && "撰写稿件..."}
-                         {status === AppStatus.GENERATING_AUDIO && "录制语音..."}
                        </>
                    )}
                  </button>
@@ -204,7 +206,6 @@ function App() {
              <BriefingView 
                 status={status}
                 summary={summaryText}
-                audioData={audioData}
              />
           </div>
 
