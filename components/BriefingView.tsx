@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Sparkles } from 'lucide-react';
+import { FileText, Sparkles, Quote } from 'lucide-react';
 import { AppStatus } from '../types';
 
 interface BriefingViewProps {
@@ -14,69 +14,79 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
   
   const isAnalyzing = status === AppStatus.ANALYZING;
 
+  // Idle state design for top layout
   if (status === AppStatus.IDLE || status === AppStatus.FETCHING_NEWS) {
       return (
-          <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center h-full min-h-[400px] flex flex-col items-center justify-center text-slate-400 sticky top-8">
-              <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-6 relative group">
-                  <div className="absolute inset-0 bg-blue-100 rounded-full scale-110 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                  <FileText className="w-8 h-8 opacity-20 group-hover:opacity-40 transition-opacity z-10" />
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 md:p-12 text-center shadow-sm relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-blue-50 rounded-full blur-3xl opacity-50 -mr-16 -mt-16 pointer-events-none"></div>
+              
+              <div className="relative z-10 flex flex-col items-center justify-center">
+                  <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mb-6 text-blue-600 rotate-3 group-hover:rotate-6 transition-transform">
+                      <Sparkles className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-xl md:text-2xl font-bold text-slate-800 mb-3">
+                      今日 AI 简报准备中
+                  </h3>
+                  <p className="text-slate-500 max-w-md mx-auto leading-relaxed">
+                     点击右上角的“生成简报”按钮，AI 将为您聚合分析全球热点，生成专属的早安简报。
+                  </p>
               </div>
-              <h3 className="text-lg font-medium text-slate-600 mb-2">等待生成简报</h3>
-              <p className="text-sm opacity-60 max-w-[200px] mx-auto leading-relaxed">
-                AI 将分析新闻并为您撰写专属的早安简报
-              </p>
           </div>
       );
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden flex flex-col h-[calc(100vh-140px)] sticky top-24 ring-1 ring-slate-900/5">
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden ring-1 ring-slate-900/5 transition-all duration-500">
       
       {/* Header Section */}
-      <div className="bg-slate-50 p-6 border-b border-slate-100">
-          <div className="flex items-center gap-3 mb-2">
-             <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center">
-                 <Sparkles className="w-4 h-4" />
+      <div className="bg-slate-50/80 backdrop-blur p-6 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                 <FileText className="w-5 h-5" />
              </div>
              <div>
-                 <h3 className="font-bold text-slate-800 text-sm">AI 智能简报</h3>
-                 <p className="text-xs text-slate-500">Gemini 2.0 Flash 实时生成</p>
+                 <h3 className="font-bold text-slate-900 text-lg">智能简报核心</h3>
+                 <p className="text-xs text-slate-500 font-medium">AI Generated Insight</p>
              </div>
           </div>
           
-          <div className="flex items-center justify-between text-xs font-medium text-slate-400 uppercase tracking-wider mt-2">
-              <span>简报内容</span>
-              {status === AppStatus.READY && <span className="text-green-600">已完成</span>}
-          </div>
+          {status === AppStatus.READY && (
+             <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold flex items-center">
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                Analysis Complete
+             </span>
+          )}
       </div>
 
       {/* Script Content */}
-      <div className="flex-1 overflow-y-auto p-6 md:p-8 scroll-smooth custom-scrollbar">
+      <div className="p-6 md:p-10 bg-white">
         {isAnalyzing ? (
-            <div className="space-y-6 animate-pulse">
-                <div className="h-4 bg-slate-100 rounded w-3/4"></div>
-                <div className="space-y-3">
+            <div className="space-y-6 animate-pulse max-w-4xl mx-auto">
+                <div className="h-4 bg-slate-100 rounded w-1/3 mb-8"></div>
+                <div className="space-y-4">
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-5/6"></div>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-4 pt-4">
                     <div className="h-3 bg-slate-100 rounded w-full"></div>
                     <div className="h-3 bg-slate-100 rounded w-4/5"></div>
                 </div>
             </div>
         ) : (
-            <article className="prose prose-slate prose-sm max-w-none">
-                <div className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium font-serif">
-                    {summary}
-                </div>
-            </article>
+            <div className="relative max-w-4xl mx-auto">
+                <Quote className="absolute -left-8 -top-4 w-12 h-12 text-slate-100 -z-10" />
+                <article className="prose prose-slate prose-lg max-w-none">
+                    <div className="whitespace-pre-wrap leading-relaxed text-slate-700 font-medium font-serif">
+                        {summary}
+                    </div>
+                </article>
+            </div>
         )}
       </div>
-
-      <div className="bg-slate-50 p-3 text-center border-t border-slate-100 text-[10px] text-slate-400 shrink-0">
-          Powered by Gemini 2.0 Flash
-      </div>
+      
+      {/* Footer decoration */}
+      <div className="h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 opacity-80"></div>
     </div>
   );
 };
