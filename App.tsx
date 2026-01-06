@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap, Map, Coffee } from 'lucide-react';
+import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap, Map, Coffee, Heart } from 'lucide-react';
 import { fetchNewsByTopic, generateNewsBriefing } from './services/gemini';
 import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession, AppMode } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
@@ -8,9 +8,11 @@ import { BriefingView } from './components/BriefingView';
 import { TravelView } from './components/TravelView';
 import { SettingsModal } from './components/SettingsModal';
 import { HistorySidebar } from './components/HistorySidebar';
+import { ShareModal } from './components/ShareModal';
 
 // Sub-topic mapping for granular fetching
 const TOPIC_SUBDIVISIONS: Record<string, string[]> = {
+    '推荐': [], // Dynamic based on user interests
     '综合': ['今日头条', '国际焦点', '国内要闻', '科技前沿', '财经热点'],
     '国内': ['时政要闻', '社会民生', '政策法规'],
     '国际': ['地缘政治', '外交动态', '海外突发'],
@@ -35,13 +37,15 @@ function App() {
   const [duration, setDuration] = useState<DurationOption>('medium');
   
   // Topic Selection State
-  const [selectedTopics, setSelectedTopics] = useState<string[]>(['综合']);
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(['推荐']);
   const [customFocusInput, setCustomFocusInput] = useState('');
   const [isCustomInputVisible, setIsCustomInputVisible] = useState(false);
 
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareContent, setShareContent] = useState("");
   
   // Settings State
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -59,6 +63,7 @@ function App() {
     if (storedSettings) {
         try {
             const parsed = JSON.parse(storedSettings);
+            // Merge with default to ensure new fields like userInterests exist
             setSettings({ ...DEFAULT_SETTINGS, ...parsed });
         } catch (e) {
             console.error("Failed to load settings", e);
@@ -86,6 +91,11 @@ function App() {
         setErrorMsg(null);
         setStatus(AppStatus.IDLE);
     }
+  };
+
+  const handleOpenShare = (content: string) => {
+      setShareContent(content);
+      setIsShareModalOpen(true);
   };
 
   const saveToHistory = (newsItems: NewsItem[], summary: string, dur: DurationOption, topics: string[]) => {
@@ -116,7 +126,7 @@ function App() {
       } else if (typeof session.focus === 'string') {
           topics = [session.focus as string];
       } else {
-          topics = ['综合'];
+          topics = ['推荐'];
       }
       setSelectedTopics(topics);
 
@@ -152,16 +162,15 @@ function App() {
           return;
       }
 
-      if (topicId === '综合') {
-          setSelectedTopics(['综合']);
+      if (topicId === '推荐' || topicId === '综合') {
+          setSelectedTopics([topicId]);
           return;
       }
 
       let newTopics = [...selectedTopics];
       
-      if (newTopics.includes('综合')) {
-          newTopics = newTopics.filter(t => t !== '综合');
-      }
+      // Remove exclusive tabs
+      newTopics = newTopics.filter(t => t !== '综合' && t !== '推荐');
 
       if (newTopics.includes(topicId)) {
           newTopics = newTopics.filter(t => t !== topicId);
@@ -170,7 +179,7 @@ function App() {
       }
 
       if (newTopics.length === 0) {
-          newTopics = ['综合'];
+          newTopics = ['推荐'];
       }
 
       setSelectedTopics(newTopics);
@@ -185,6 +194,17 @@ function App() {
       setCompletedTasks(0);
       
       let requestedTopics = [...selectedTopics];
+      
+      // If "For You" (Recommend) is selected, inject user interests
+      if (requestedTopics.includes('推荐')) {
+          const interests = settings.userInterests && settings.userInterests.length > 0 
+                            ? settings.userInterests 
+                            : ['综合热点']; // Default fallback
+          // Replace '推荐' with actual interests for processing
+          requestedTopics = requestedTopics.filter(t => t !== '推荐');
+          requestedTopics.push(...interests);
+      }
+
       if (isCustomInputVisible && customFocusInput.trim()) {
           if (!requestedTopics.includes(customFocusInput.trim())) {
               requestedTopics.push(customFocusInput.trim());
@@ -202,7 +222,7 @@ function App() {
       let searchSegments: string[] = [];
       
       requestedTopics.forEach(mainTopic => {
-          if (TOPIC_SUBDIVISIONS[mainTopic]) {
+          if (TOPIC_SUBDIVISIONS[mainTopic] && TOPIC_SUBDIVISIONS[mainTopic].length > 0) {
               searchSegments.push(...TOPIC_SUBDIVISIONS[mainTopic]);
           } else {
               searchSegments.push(mainTopic);
@@ -256,13 +276,15 @@ function App() {
       setActiveSegment("AI 深度聚合分析");
       setLoadingText("正在进行全量深度分析...");
       
-      const text = await generateNewsBriefing(allNews, duration, settings, requestedTopics);
+      // Use original selected topics for context in prompt, but if it was '推荐', use '个人定制推荐'
+      const promptTopics = selectedTopics.includes('推荐') ? ['个人定制推荐', ...settings.userInterests] : requestedTopics;
+      const text = await generateNewsBriefing(allNews, duration, settings, promptTopics);
       setSummaryText(text);
 
       setStatus(AppStatus.READY);
       setLoadingText("完成");
       
-      saveToHistory(allNews, text, duration, requestedTopics);
+      saveToHistory(allNews, text, duration, selectedTopics);
 
     } catch (err: any) {
       console.error(err);
@@ -299,6 +321,12 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSaveSettings}
         currentSettings={settings}
+      />
+
+      <ShareModal 
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        defaultText={shareContent}
       />
 
       <HistorySidebar
@@ -405,7 +433,8 @@ function App() {
         {appMode === AppMode.TRAVEL ? (
             <TravelView 
                 settings={settings} 
-                onError={(msg) => { setErrorMsg(msg); setStatus(AppStatus.ERROR); }} 
+                onError={(msg) => { setErrorMsg(msg); setStatus(AppStatus.ERROR); }}
+                onOpenShare={handleOpenShare}
             />
         ) : (
         <>
@@ -414,6 +443,7 @@ function App() {
                 
                 <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
                     {[
+                        { id: '推荐', icon: Heart, label: '推荐', color: 'text-pink-500' },
                         { id: '综合', icon: Globe, label: '综合 (全网)' },
                         { id: '国内', icon: Hash, label: '国内' },
                         { id: '国际', icon: Globe, label: '国际' },
@@ -436,7 +466,7 @@ function App() {
                                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                                 }`}
                             >
-                                <item.icon className="w-3.5 h-3.5 mr-2" />
+                                <item.icon className={`w-3.5 h-3.5 mr-2 ${!isSelected && item.color ? item.color : ''}`} />
                                 {item.label}
                             </button>
                         );
@@ -513,6 +543,7 @@ function App() {
                 <BriefingView 
                     status={status}
                     summary={summaryText}
+                    onOpenShare={handleOpenShare}
                 />
             </section>
 

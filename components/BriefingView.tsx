@@ -1,34 +1,31 @@
 
 import React, { useState, useRef } from 'react';
-import { FileText, Sparkles, Copy, Check, Share2, Loader2 } from 'lucide-react';
+import { FileText, Sparkles, Copy, Check, Share2, Loader2, MessageSquare } from 'lucide-react';
 import { AppStatus } from '../types';
-import html2canvas from 'html2canvas';
 
 interface BriefingViewProps {
   status: AppStatus;
   summary: string;
+  onOpenShare: (content: string) => void;
 }
 
 export const BriefingView: React.FC<BriefingViewProps> = ({ 
   status, 
-  summary, 
+  summary,
+  onOpenShare
 }) => {
-  const [copied, setCopied] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const isAnalyzing = status === AppStatus.ANALYZING;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(summary);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleShareImage = async () => {
     if (!contentRef.current) return;
     setIsGeneratingImage(true);
 
     try {
+        // Dynamic import to reduce initial bundle size
+        const html2canvas = (await import('html2canvas')).default;
+
         // Wait a bit to ensure UI renders correctly if anything changed
         await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -44,6 +41,7 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                 if (element) {
                     element.style.boxShadow = 'none';
                     element.style.borderRadius = '0';
+                    element.style.padding = '40px'; // Add padding for better look
                 }
             }
         });
@@ -151,21 +149,21 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
             {status === AppStatus.READY && (
                 <>
                 <button 
+                    onClick={() => onOpenShare(summary)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
+                    title="自定义分享"
+                >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    分享
+                </button>
+                <button 
                     onClick={handleShareImage}
                     disabled={isGeneratingImage}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95 disabled:opacity-50"
                     title="生成长图"
                 >
                     {isGeneratingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                    {isGeneratingImage ? '生成中' : '分享'}
-                </button>
-                <button 
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
-                    title="复制全文"
-                >
-                    {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? '已复制' : '复制'}
+                    {isGeneratingImage ? '生成中' : '长图'}
                 </button>
                 <span className="hidden md:flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold items-center">
                     <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>

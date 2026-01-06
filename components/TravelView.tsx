@@ -1,13 +1,13 @@
 
 import React, { useState, useRef } from 'react';
-import { MapPin, Utensils, Calendar, Wallet, Compass, Plane, Sparkles, Loader2, Search, Navigation, Share2 } from 'lucide-react';
+import { MapPin, Utensils, Calendar, Wallet, Compass, Plane, Sparkles, Loader2, Search, Navigation, Share2, Copy, Check, MessageSquare } from 'lucide-react';
 import { TravelRequest, TravelType, AppStatus } from '../types';
 import { generateLifestyleGuide } from '../services/gemini';
-import html2canvas from 'html2canvas';
 
 interface TravelViewProps {
   settings: any;
   onError: (msg: string) => void;
+  onOpenShare: (content: string) => void;
 }
 
 const INTEREST_TAGS = [
@@ -20,7 +20,7 @@ const FOOD_TAGS = [
   '海鲜', '甜品咖啡', '辣味', '清淡'
 ];
 
-export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => {
+export const TravelView: React.FC<TravelViewProps> = ({ settings, onError, onOpenShare }) => {
   const [mode, setMode] = useState<TravelType>('PLAN');
   const [destination, setDestination] = useState('');
   const [days, setDays] = useState(3);
@@ -72,11 +72,15 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => 
     setIsGeneratingImage(true);
 
     try {
+        // Lazy load html2canvas
+        const html2canvas = (await import('html2canvas')).default;
+
         await new Promise(resolve => setTimeout(resolve, 100));
 
         const canvas = await html2canvas(resultRef.current, {
             scale: 2, 
             useCORS: true,
+            allowTaint: true, // Allow external images
             backgroundColor: '#ffffff',
             scrollY: -window.scrollY,
             logging: false,
@@ -90,7 +94,7 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => 
         link.click();
     } catch (err) {
         console.error("Image generation failed", err);
-        onError("图片生成失败，请重试");
+        onError("图片生成失败，可能是因为网络图片权限限制。请尝试使用复制功能。");
     } finally {
         setIsGeneratingImage(false);
     }
@@ -104,7 +108,6 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => 
       if (line.startsWith('### ')) return <h3 key={index} className="text-lg font-bold text-slate-700 mt-4 mb-2">{line.replace('### ', '')}</h3>;
       
       // Handle Images: ![alt](url)
-      // We accept images even if they are not strictly on their own line if the regex matches, but prompt asks for own line.
       const imageMatch = line.match(/!\[(.*?)\]\((.*?)\)/);
       if (imageMatch && line.trim().startsWith('![')) {
           const alt = imageMatch[1];
@@ -117,6 +120,7 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => 
                       className="w-full h-48 md:h-64 object-cover hover:scale-105 transition-transform duration-700" 
                       loading="lazy"
                       referrerPolicy="no-referrer"
+                      crossOrigin="anonymous" // CRITICAL for html2canvas useCORS: true
                       onError={(e) => {
                           // Fallback if image fails to load
                           (e.target as HTMLImageElement).style.display = 'none';
@@ -306,13 +310,21 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError }) => 
               </div>
 
               <div className="flex items-center gap-2" data-html2canvas-ignore>
+                <button 
+                    onClick={() => onOpenShare(result)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
+                    title="自定义分享"
+                >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    分享
+                </button>
                  <button 
                     onClick={handleShareImage}
                     disabled={isGeneratingImage}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95 disabled:opacity-50"
                 >
                     {isGeneratingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                    {isGeneratingImage ? '生成中' : '分享'}
+                    {isGeneratingImage ? '生成中' : '长图'}
                 </button>
               </div>
            </div>

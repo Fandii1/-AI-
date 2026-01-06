@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server } from 'lucide-react';
+import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart } from 'lucide-react';
 import { AppSettings, DEFAULT_SETTINGS } from '../types';
 
 interface SettingsModalProps {
@@ -20,6 +21,10 @@ const AVAILABLE_SOURCES = [
   "Baidu",
   "Mainstream Media",
   "Official Government Sites"
+];
+
+const AVAILABLE_INTERESTS = [
+  "科技", "财经", "国际", "国内", "娱乐", "体育", "军事", "健康", "文化", "教育"
 ];
 
 const RECOMMENDED_GEMINI_MODELS = [
@@ -59,6 +64,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   };
 
+  const toggleInterest = (interest: string) => {
+    setFormData(prev => {
+      const interests = prev.userInterests || [];
+      if (interests.includes(interest)) {
+        return { ...prev, userInterests: interests.filter(i => i !== interest) };
+      } else {
+        return { ...prev, userInterests: [...interests, interest] };
+      }
+    });
+  };
+
   const handleReset = () => {
     setFormData(DEFAULT_SETTINGS);
   };
@@ -73,7 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] flex flex-col border border-slate-100">
         <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-white flex-shrink-0">
-          <h2 className="text-xl font-bold text-slate-800">API 设置</h2>
+          <h2 className="text-xl font-bold text-slate-800">个性化与设置</h2>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500">
             <X className="w-5 h-5" />
           </button>
@@ -81,6 +97,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <form onSubmit={handleSubmit} className="p-6 space-y-8 overflow-y-auto flex-1 custom-scrollbar">
           
+          {/* Personalization Section */}
+          <div className="space-y-4">
+              <label className="text-sm font-bold text-slate-800 flex items-center">
+                  <Heart className="w-4 h-4 mr-2 text-pink-500" />
+                  我的兴趣偏好 (用于"推荐"频道)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                  {AVAILABLE_INTERESTS.map(interest => {
+                      const isSelected = (formData.userInterests || []).includes(interest);
+                      return (
+                          <button
+                              key={interest}
+                              type="button"
+                              onClick={() => toggleInterest(interest)}
+                              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+                                  isSelected 
+                                  ? 'bg-pink-50 border-pink-500 text-pink-700' 
+                                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                              }`}
+                          >
+                              {interest}
+                          </button>
+                      );
+                  })}
+              </div>
+          </div>
+
+          <div className="h-px bg-slate-100"></div>
+
           {/* Provider Selection */}
           <div className="space-y-4">
               <label className="text-sm font-bold text-slate-800 flex items-center">

@@ -48,6 +48,7 @@ export interface AppSettings {
   model: string;   // Used for both
 
   searchSources: string[];
+  userInterests: string[]; // For personalization
 }
 
 export interface BriefingSession {
@@ -65,5 +66,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   baseUrl: 'https://api.openai.com/v1',
   model: 'gemini-2.0-flash',
-  searchSources: ['Google News', 'Mainstream Media', 'Official Outlets']
+  searchSources: ['Google News', 'Mainstream Media', 'Official Outlets'],
+  userInterests: ['科技', '财经']
 };
