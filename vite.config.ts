@@ -12,11 +12,11 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     define: {
       // Injects process.env variables into the code during build.
-      // CRITICAL FIX: Prioritize `process.env` (System/Vercel variables) over `env` (.env file variables).
-      // This ensures that keys set in the Vercel Dashboard are correctly picked up.
-      'process.env.API_KEY': JSON.stringify(process.env.API_KEY || env.API_KEY),
-      'process.env.DEEPSEEK_API_KEY': JSON.stringify(process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY),
-      'process.env.TONGYI_API_KEY': JSON.stringify(process.env.TONGYI_API_KEY || env.TONGYI_API_KEY)
+      // CRITICAL FIX: We add `|| ""` to ensure undefined variables become empty strings
+      // rather than being stripped out or causing syntax errors in the injection process.
+      'process.env.API_KEY': JSON.stringify(process.env.API_KEY || env.API_KEY || ""),
+      'process.env.DEEPSEEK_API_KEY': JSON.stringify(process.env.DEEPSEEK_API_KEY || env.DEEPSEEK_API_KEY || ""),
+      'process.env.TONGYI_API_KEY': JSON.stringify(process.env.TONGYI_API_KEY || env.TONGYI_API_KEY || "")
     }
   }
 })

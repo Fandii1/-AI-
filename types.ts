@@ -62,10 +62,10 @@ export interface BriefingSession {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  provider: 'gemini',
+  provider: 'tongyi',
   apiKey: '',
-  baseUrl: 'https://api.openai.com/v1',
-  model: 'gemini-2.0-flash',
+  baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  model: 'qwen-flash',
   searchSources: ['Google News', 'Mainstream Media', 'Official Outlets'],
   userInterests: ['科技', '财经']
 };

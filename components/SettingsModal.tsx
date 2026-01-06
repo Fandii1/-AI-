@@ -202,7 +202,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => {
                           handleChange('provider', 'tongyi');
                           handleChange('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
-                          handleChange('model', 'qwen-max');
+                          handleChange('model', 'qwen-flash');
                       }}
                       className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'tongyi' 
