@@ -26,22 +26,45 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
         // Dynamic import to reduce initial bundle size
         const html2canvas = (await import('html2canvas')).default;
 
-        // Wait a bit to ensure UI renders correctly if anything changed
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait a bit to ensure fonts and UI render correctly
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // Fixed width for the generated image to ensure consistent "Card" look
+        // regardless of whether the user is on Mobile or Desktop.
+        const EXPORT_WIDTH = 750; 
 
         const canvas = await html2canvas(contentRef.current, {
-            scale: 2, // High resolution
-            useCORS: true,
-            backgroundColor: '#ffffff', // Force white background
-            scrollY: -window.scrollY,
+            scale: 2, // Retina resolution
+            useCORS: true, // Handle cross-origin images if any
+            allowTaint: true,
+            backgroundColor: '#ffffff',
+            // Force the canvas to be a specific width so text wraps nicely like a newspaper
+            width: EXPORT_WIDTH, 
+            windowWidth: EXPORT_WIDTH,
+            scrollY: -window.scrollY, // Fix scroll issue
             logging: false,
             onclone: (clonedDoc) => {
-                // Adjust styles for the screenshot if needed
                 const element = clonedDoc.querySelector('.briefing-card') as HTMLElement;
                 if (element) {
+                    // Optimize styling for the static image
+                    element.style.width = `${EXPORT_WIDTH}px`;
+                    element.style.maxWidth = 'none';
+                    element.style.margin = '0';
                     element.style.boxShadow = 'none';
                     element.style.borderRadius = '0';
-                    element.style.padding = '40px'; // Add padding for better look
+                    element.style.border = 'none';
+                    element.style.padding = '40px'; 
+                    
+                    // Hide interactive buttons in the clone
+                    const btns = element.querySelector('.share-buttons');
+                    if (btns) (btns as HTMLElement).style.display = 'none';
+
+                    // Prevent Image Stretching
+                    const images = element.querySelectorAll('img');
+                    images.forEach((img: HTMLImageElement) => {
+                         img.style.height = 'auto';
+                         img.style.objectFit = 'contain';
+                    });
                 }
             }
         });
@@ -145,7 +168,7 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
              </div>
           </div>
           
-          <div className="flex items-center gap-2" data-html2canvas-ignore>
+          <div className="flex items-center gap-2 share-buttons" data-html2canvas-ignore>
             {status === AppStatus.READY && (
                 <>
                 <button 
@@ -154,7 +177,7 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                     title="自定义分享"
                 >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    分享
+                    编辑文案
                 </button>
                 <button 
                     onClick={handleShareImage}
@@ -163,7 +186,7 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                     title="生成长图"
                 >
                     {isGeneratingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                    {isGeneratingImage ? '生成中' : '长图'}
+                    {isGeneratingImage ? '生成中' : '存为长图'}
                 </button>
                 <span className="hidden md:flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold items-center">
                     <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>

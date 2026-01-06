@@ -12,7 +12,8 @@ export default defineConfig(({ mode }) => {
     define: {
       // Injects process.env variables into the code during build
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
-      'process.env.DEEPSEEK_API_KEY': JSON.stringify(env.DEEPSEEK_API_KEY)
+      'process.env.DEEPSEEK_API_KEY': JSON.stringify(env.DEEPSEEK_API_KEY),
+      'process.env.TONGYI_API_KEY': JSON.stringify(env.TONGYI_API_KEY)
     }
   }
 })

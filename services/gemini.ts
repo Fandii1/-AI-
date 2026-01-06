@@ -19,6 +19,10 @@ const getEffectiveKey = (settings: AppSettings): string => {
     if (settings.provider === 'deepseek') {
         return process.env.DEEPSEEK_API_KEY || '';
     }
+
+    if (settings.provider === 'tongyi') {
+        return process.env.TONGYI_API_KEY || '';
+    }
     
     return '';
 };
@@ -35,7 +39,7 @@ const constructChatUrl = (baseUrl: string): string => {
       return `${url}/chat/completions`;
   }
   
-  // Handle bare domain like 'https://api.deepseek.com'
+  // Handle bare domain like 'https://api.deepseek.com' or 'https://dashscope.aliyuncs.com/compatible-mode/v1'
   return `${url}/chat/completions`;
 };
 
@@ -109,7 +113,8 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
   
   const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) {
-      throw new Error(`请配置 ${settings.provider === 'deepseek' ? 'DeepSeek' : 'AI'} API Key`);
+      const providerName = settings.provider === 'deepseek' ? 'DeepSeek' : (settings.provider === 'tongyi' ? '通义千问' : 'AI');
+      throw new Error(`请配置 ${providerName} API Key`);
   }
 
   // Optimized prompt for strict timeliness and sub-topic focus
@@ -143,7 +148,7 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
   let groundingChunks: any[] = [];
 
   try {
-      if (settings.provider === 'openai' || settings.provider === 'deepseek') {
+      if (['openai', 'deepseek', 'tongyi'].includes(settings.provider)) {
           text = await callOpenAICompatible(
               settings.baseUrl,
               effectiveKey,
@@ -259,7 +264,7 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
     ${newsContext}
   `;
 
-  if (settings.provider === 'openai' || settings.provider === 'deepseek') {
+  if (['openai', 'deepseek', 'tongyi'].includes(settings.provider)) {
       let text = await callOpenAICompatible(
           settings.baseUrl,
           effectiveKey,
@@ -374,7 +379,7 @@ export async function generateLifestyleGuide(req: TravelRequest, settings: AppSe
   }
 
   try {
-    if (settings.provider === 'openai' || settings.provider === 'deepseek') {
+    if (['openai', 'deepseek', 'tongyi'].includes(settings.provider)) {
         let text = await callOpenAICompatible(
             settings.baseUrl,
             effectiveKey,

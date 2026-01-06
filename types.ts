@@ -37,7 +37,7 @@ export interface TravelRequest {
   interests: string[];
 }
 
-export type AIProvider = 'gemini' | 'openai' | 'deepseek';
+export type AIProvider = 'gemini' | 'openai' | 'deepseek' | 'tongyi';
 
 export interface AppSettings {
   provider: AIProvider;

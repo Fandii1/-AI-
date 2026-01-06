@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart, Brain } from 'lucide-react';
+import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart, Brain, MessageSquare } from 'lucide-react';
 import { AppSettings, DEFAULT_SETTINGS } from '../types';
 
 interface SettingsModalProps {
@@ -37,6 +37,13 @@ const DEEPSEEK_MODELS = [
   { value: 'deepseek-reasoner', label: 'DeepSeek R1 (深度推理)' },
 ];
 
+const TONGYI_MODELS = [
+  { value: 'qwen-max', label: 'Qwen Max (通义千问-Max)' },
+  { value: 'qwen-plus', label: 'Qwen Plus (通义千问-Plus)' },
+  { value: 'qwen-turbo', label: 'Qwen Turbo (通义千问-Turbo)' },
+  { value: 'qwen-flash', label: 'Qwen Flash (通义千问-Flash)' },
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -47,6 +54,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   
   const hasBuiltInGemini = !!process.env.API_KEY;
   const hasBuiltInDeepSeek = !!process.env.DEEPSEEK_API_KEY;
+  const hasBuiltInTongyi = !!process.env.TONGYI_API_KEY;
 
   useEffect(() => {
     if (isOpen) {
@@ -95,12 +103,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   // Helper to determine if we should show "Built-in Key" status
   const shouldUseBuiltIn = !formData.apiKey && (
       (formData.provider === 'gemini' && hasBuiltInGemini) ||
-      (formData.provider === 'deepseek' && hasBuiltInDeepSeek)
+      (formData.provider === 'deepseek' && hasBuiltInDeepSeek) ||
+      (formData.provider === 'tongyi' && hasBuiltInTongyi)
   );
 
   const getPlaceholder = () => {
       if (formData.provider === 'gemini' && hasBuiltInGemini) return "已内置 Gemini Key (可留空)";
       if (formData.provider === 'deepseek' && hasBuiltInDeepSeek) return "已内置 DeepSeek Key (可留空)";
+      if (formData.provider === 'tongyi' && hasBuiltInTongyi) return "已内置通义 Key (可留空)";
       return "sk-...";
   };
 
@@ -151,7 +161,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <Cpu className="w-4 h-4 mr-2 text-blue-600" />
                   AI 服务提供商
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <button
                       type="button"
                       onClick={() => {
@@ -166,7 +176,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                       <Zap className="w-5 h-5" />
                       <span className="text-xs">Gemini</span>
-                      <span className="text-[9px] opacity-70 font-normal">官方 / 联网强</span>
+                      <span className="text-[9px] opacity-70 font-normal">官方</span>
                   </button>
                   
                   <button
@@ -184,14 +194,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                       <Brain className="w-5 h-5" />
                       <span className="text-xs">DeepSeek</span>
-                      <span className="text-[9px] opacity-70 font-normal">国内直连 / 推理</span>
+                      <span className="text-[9px] opacity-70 font-normal">深度求索</span>
+                  </button>
+                  
+                  <button
+                      type="button"
+                      onClick={() => {
+                          handleChange('provider', 'tongyi');
+                          handleChange('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+                          handleChange('model', 'qwen-max');
+                      }}
+                      className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
+                          formData.provider === 'tongyi' 
+                          ? 'bg-orange-50 border-orange-500 text-orange-700 font-bold ring-1 ring-orange-500' 
+                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                      }`}
+                  >
+                      <MessageSquare className="w-5 h-5" />
+                      <span className="text-xs">通义千问</span>
+                      <span className="text-[9px] opacity-70 font-normal">阿里 Qwen</span>
                   </button>
 
                   <button
                       type="button"
                       onClick={() => {
                           handleChange('provider', 'openai');
-                          if (formData.baseUrl.includes('googleapis') || formData.baseUrl.includes('deepseek')) {
+                          if (formData.baseUrl.includes('googleapis') || formData.baseUrl.includes('deepseek') || formData.baseUrl.includes('aliyuncs')) {
                               handleChange('baseUrl', 'https://api.openai.com/v1');
                               handleChange('model', 'gpt-4o');
                           }
@@ -204,7 +232,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                       <Server className="w-5 h-5" />
                       <span className="text-xs">Custom</span>
-                      <span className="text-[9px] opacity-70 font-normal">OpenAI 兼容</span>
+                      <span className="text-[9px] opacity-70 font-normal">兼容接口</span>
                   </button>
               </div>
           </div>
@@ -248,7 +276,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                              R1 模型适合深度推理分析，V3 模型响应速度更快。官方 API 不支持联网搜索。
                           </p>
                       </div>
-                      {/* Hidden Base URL for DeepSeek default, but kept in state */}
+                 </div>
+             )}
+
+             {formData.provider === 'tongyi' && (
+                 <div className="space-y-4 animate-in fade-in slide-in-from-top-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="space-y-2">
+                          <label className="text-sm font-semibold text-slate-700">通义千问模型 (Qwen)</label>
+                          <select
+                            value={formData.model}
+                            onChange={(e) => handleChange('model', e.target.value)}
+                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                          >
+                             {TONGYI_MODELS.map(m => (
+                                <option key={m.value} value={m.value}>{m.label}</option>
+                             ))}
+                          </select>
+                          <p className="text-[10px] text-slate-500">
+                             需开通阿里云 DashScope 服务。建议使用 qwen-max 以获得最佳效果。
+                          </p>
+                      </div>
                  </div>
              )}
 

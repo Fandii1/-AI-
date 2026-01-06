@@ -53,7 +53,8 @@ function App() {
   // Determine if we have a valid key for the current provider
   const effectiveKey = settings.apiKey || 
                        (settings.provider === 'gemini' ? process.env.API_KEY : 
-                       (settings.provider === 'deepseek' ? process.env.DEEPSEEK_API_KEY : ''));
+                       (settings.provider === 'deepseek' ? process.env.DEEPSEEK_API_KEY : 
+                       (settings.provider === 'tongyi' ? process.env.TONGYI_API_KEY : '')));
 
   const hasValidSetup = !!effectiveKey;
 

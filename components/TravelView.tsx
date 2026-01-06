@@ -75,15 +75,42 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError, onOpe
         // Lazy load html2canvas
         const html2canvas = (await import('html2canvas')).default;
 
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Ensure external images are loaded or at least attempted
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const EXPORT_WIDTH = 750;
 
         const canvas = await html2canvas(resultRef.current, {
             scale: 2, 
             useCORS: true,
             allowTaint: true, // Allow external images
             backgroundColor: '#ffffff',
+            width: EXPORT_WIDTH,
+            windowWidth: EXPORT_WIDTH,
             scrollY: -window.scrollY,
             logging: false,
+            onclone: (clonedDoc) => {
+                const element = clonedDoc.querySelector('.travel-card') as HTMLElement;
+                if (element) {
+                    element.style.width = `${EXPORT_WIDTH}px`;
+                    element.style.maxWidth = 'none';
+                    element.style.margin = '0';
+                    element.style.boxShadow = 'none';
+                    element.style.borderRadius = '0';
+                    
+                    const btns = element.querySelector('.share-buttons');
+                    if (btns) (btns as HTMLElement).style.display = 'none';
+
+                    // Fix Image Stretching
+                    const images = element.querySelectorAll('img');
+                    images.forEach((img: HTMLImageElement) => {
+                         // Reset height constraints to allow natural aspect ratio scaling
+                         img.style.height = 'auto';
+                         img.style.maxHeight = 'none';
+                         img.style.objectFit = 'contain';
+                    });
+                }
+            }
         });
 
         const image = canvas.toDataURL("image/png");
@@ -295,7 +322,7 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError, onOpe
 
       {/* Result Section */}
       {result && (
-        <div ref={resultRef} className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-8">
+        <div ref={resultRef} className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-8 travel-card">
            <div className="bg-slate-50/80 backdrop-blur p-6 border-b border-slate-100 sticky top-0 z-20 flex items-center justify-between print:static">
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg ${mode === 'PLAN' ? 'bg-gradient-to-br from-teal-400 to-emerald-500' : 'bg-gradient-to-br from-orange-400 to-red-500'}`}>
@@ -309,14 +336,14 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError, onOpe
                 </div>
               </div>
 
-              <div className="flex items-center gap-2" data-html2canvas-ignore>
+              <div className="flex items-center gap-2 share-buttons" data-html2canvas-ignore>
                 <button 
                     onClick={() => onOpenShare(result)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
                     title="自定义分享"
                 >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    分享
+                    编辑文案
                 </button>
                  <button 
                     onClick={handleShareImage}
@@ -324,7 +351,7 @@ export const TravelView: React.FC<TravelViewProps> = ({ settings, onError, onOpe
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95 disabled:opacity-50"
                 >
                     {isGeneratingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                    {isGeneratingImage ? '生成中' : '长图'}
+                    {isGeneratingImage ? '生成中' : '存为长图'}
                 </button>
               </div>
            </div>
