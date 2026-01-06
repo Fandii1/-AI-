@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap } from 'lucide-react';
+import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap, Map, Coffee } from 'lucide-react';
 import { fetchNewsByTopic, generateNewsBriefing } from './services/gemini';
-import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession } from './types';
+import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession, AppMode } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
 import { BriefingView } from './components/BriefingView';
+import { TravelView } from './components/TravelView';
 import { SettingsModal } from './components/SettingsModal';
 import { HistorySidebar } from './components/HistorySidebar';
 
@@ -17,6 +19,7 @@ const TOPIC_SUBDIVISIONS: Record<string, string[]> = {
 };
 
 function App() {
+  const [appMode, setAppMode] = useState<AppMode>(AppMode.NEWS);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [loadingText, setLoadingText] = useState<string>("准备就绪");
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -122,6 +125,7 @@ function App() {
       setErrorMsg(null);
       setCompletedTasks(0);
       setTotalTasks(0);
+      setAppMode(AppMode.NEWS); // Force switch to news mode when loading history
   };
 
   const deleteSession = (id: string, e: React.MouseEvent) => {
@@ -309,17 +313,41 @@ function App() {
       {/* Navbar */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm backdrop-blur-md bg-white/90 transition-all duration-300">
           <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
                 <div className="bg-slate-900 p-2 rounded-lg text-white shadow-lg shadow-slate-900/20">
                   <Newspaper className="w-5 h-5" />
                 </div>
-                <h1 className="text-xl font-bold tracking-tight text-slate-900 hidden md:block">
-                    早安 AI 简报
+                
+                {/* Mode Switcher */}
+                <div className="hidden md:flex bg-slate-100 p-1 rounded-lg">
+                    <button 
+                        onClick={() => setAppMode(AppMode.NEWS)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${appMode === AppMode.NEWS ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        <Newspaper className="w-3.5 h-3.5" />
+                        新闻简报
+                    </button>
+                    <button 
+                        onClick={() => setAppMode(AppMode.TRAVEL)}
+                        className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${appMode === AppMode.TRAVEL ? 'bg-white text-teal-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                        <Map className="w-3.5 h-3.5" />
+                        生活探索
+                    </button>
+                </div>
+                {/* Mobile Title */}
+                <h1 className="md:hidden text-lg font-bold tracking-tight text-slate-900">
+                    早安 AI
                 </h1>
             </div>
 
             <div className="flex items-center gap-2">
                  
+                 {/* Mobile Mode Toggle (Simple) */}
+                 <button className="md:hidden p-2 text-slate-500" onClick={() => setAppMode(prev => prev === AppMode.NEWS ? AppMode.TRAVEL : AppMode.NEWS)}>
+                     {appMode === AppMode.NEWS ? <Map className="w-5 h-5" /> : <Newspaper className="w-5 h-5" />}
+                 </button>
+
                  <button
                     onClick={() => setIsHistoryOpen(true)}
                     className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-blue-600 transition-colors relative"
@@ -339,30 +367,34 @@ function App() {
                     {hasValidSetup ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5 text-red-500" />}
                  </button>
 
-                 <div className="h-6 w-px bg-slate-200 mx-1"></div>
+                 {appMode === AppMode.NEWS && (
+                 <>
+                    <div className="h-6 w-px bg-slate-200 mx-1"></div>
 
-                 <button 
-                    onClick={handleStartBriefing}
-                    disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 rounded-full text-sm font-bold transition-all flex items-center shadow-lg shadow-blue-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none whitespace-nowrap overflow-hidden relative"
-                 >
-                   {status === AppStatus.FETCHING_NEWS && (
-                        <div className="absolute left-0 bottom-0 h-1 bg-blue-400 transition-all duration-300" style={{ width: `${(completedTasks / totalTasks) * 100}%` }}></div>
-                   )}
-                   
-                   {status === AppStatus.IDLE || status === AppStatus.READY || status === AppStatus.ERROR ? (
-                       <>
-                         <Sparkles className="w-4 h-4 mr-2" />
-                         <span className="hidden sm:inline">生成深度简报</span>
-                         <span className="sm:hidden">生成</span>
-                       </>
-                   ) : (
-                       <>
-                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                         <span className="min-w-[80px] text-center">{getStatusText()}</span>
-                       </>
-                   )}
-                 </button>
+                    <button 
+                        onClick={handleStartBriefing}
+                        disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 rounded-full text-sm font-bold transition-all flex items-center shadow-lg shadow-blue-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none whitespace-nowrap overflow-hidden relative"
+                    >
+                    {status === AppStatus.FETCHING_NEWS && (
+                            <div className="absolute left-0 bottom-0 h-1 bg-blue-400 transition-all duration-300" style={{ width: `${(completedTasks / totalTasks) * 100}%` }}></div>
+                    )}
+                    
+                    {status === AppStatus.IDLE || status === AppStatus.READY || status === AppStatus.ERROR ? (
+                        <>
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            <span className="hidden sm:inline">生成深度简报</span>
+                            <span className="sm:hidden">生成</span>
+                        </>
+                    ) : (
+                        <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            <span className="min-w-[80px] text-center">{getStatusText()}</span>
+                        </>
+                    )}
+                    </button>
+                 </>
+                 )}
             </div>
           </div>
       </nav>
@@ -370,147 +402,156 @@ function App() {
       {/* Main Content Area */}
       <div className="max-w-4xl mx-auto p-4 md:p-6">
         
-        {/* Controls Bar */}
-        <div className="mb-8 bg-white rounded-2xl border border-slate-200 p-1 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-4 overflow-hidden">
-            
-            <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
-                {[
-                    { id: '综合', icon: Globe, label: '综合 (全网)' },
-                    { id: '国内', icon: Hash, label: '国内' },
-                    { id: '国际', icon: Globe, label: '国际' },
-                    { id: '科技', icon: Cpu, label: '科技' },
-                    { id: '财经', icon: TrendingUp, label: '财经' },
-                    { id: '自定义', icon: Edit3, label: '自定义' },
-                ].map((item) => {
-                    const isSelected = item.id === '自定义' 
-                        ? isCustomInputVisible 
-                        : selectedTopics.includes(item.id);
+        {appMode === AppMode.TRAVEL ? (
+            <TravelView 
+                settings={settings} 
+                onError={(msg) => { setErrorMsg(msg); setStatus(AppStatus.ERROR); }} 
+            />
+        ) : (
+        <>
+            {/* News Controls Bar */}
+            <div className="mb-8 bg-white rounded-2xl border border-slate-200 p-1 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-4 overflow-hidden">
+                
+                <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
+                    {[
+                        { id: '综合', icon: Globe, label: '综合 (全网)' },
+                        { id: '国内', icon: Hash, label: '国内' },
+                        { id: '国际', icon: Globe, label: '国际' },
+                        { id: '科技', icon: Cpu, label: '科技' },
+                        { id: '财经', icon: TrendingUp, label: '财经' },
+                        { id: '自定义', icon: Edit3, label: '自定义' },
+                    ].map((item) => {
+                        const isSelected = item.id === '自定义' 
+                            ? isCustomInputVisible 
+                            : selectedTopics.includes(item.id);
 
-                    return (
+                        return (
+                            <button
+                                key={item.id}
+                                onClick={() => toggleTopic(item.id)}
+                                disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
+                                className={`flex items-center px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                                isSelected
+                                ? 'bg-slate-900 text-white shadow-md'
+                                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                }`}
+                            >
+                                <item.icon className="w-3.5 h-3.5 mr-2" />
+                                {item.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="flex items-center bg-slate-100 rounded-xl p-1 mx-2 mb-2 md:mb-0">
+                    {(['short', 'medium', 'long'] as DurationOption[]).map((opt) => (
                         <button
-                            key={item.id}
-                            onClick={() => toggleTopic(item.id)}
+                            key={opt}
+                            onClick={() => setDuration(opt)}
                             disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                            className={`flex items-center px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
-                               isSelected
-                               ? 'bg-slate-900 text-white shadow-md'
-                               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                duration === opt 
+                                ? 'bg-white text-blue-600 shadow-sm' 
+                                : 'text-slate-500 hover:text-slate-700'
                             }`}
                         >
-                            <item.icon className="w-3.5 h-3.5 mr-2" />
-                            {item.label}
+                            {opt === 'short' ? '精简' : opt === 'medium' ? '标准' : '深度'}
                         </button>
-                    );
-                })}
-            </div>
-
-            <div className="flex items-center bg-slate-100 rounded-xl p-1 mx-2 mb-2 md:mb-0">
-                {(['short', 'medium', 'long'] as DurationOption[]).map((opt) => (
-                    <button
-                        key={opt}
-                        onClick={() => setDuration(opt)}
-                        disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            duration === opt 
-                            ? 'bg-white text-blue-600 shadow-sm' 
-                            : 'text-slate-500 hover:text-slate-700'
-                        }`}
-                    >
-                        {opt === 'short' ? '精简' : opt === 'medium' ? '标准' : '深度'}
-                    </button>
-                ))}
-            </div>
-        </div>
-
-        {isCustomInputVisible && (
-            <div className="mb-6 -mt-4 animate-in fade-in slide-in-from-top-2">
-                <div className="relative">
-                    <Edit3 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
-                    <input 
-                        type="text" 
-                        placeholder="输入额外想关注的主题（例如：人工智能、欧洲杯）" 
-                        className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
-                        value={customFocusInput}
-                        onChange={(e) => setCustomFocusInput(e.target.value)}
-                    />
+                    ))}
                 </div>
             </div>
-        )}
 
-        {status === AppStatus.ERROR && (
-            <div className="mb-8 bg-red-50 text-red-600 p-4 rounded-xl border border-red-100 flex items-center justify-between animate-in fade-in slide-in-from-top-4">
-                <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                    <span className="text-sm font-medium">{errorMsg}</span>
-                </div>
-                <button onClick={handleStartBriefing} className="text-sm underline font-semibold hover:text-red-700">重试</button>
-            </div>
-        )}
-
-        {/* Live Status Indicator (Shown during fetching) */}
-        {status === AppStatus.FETCHING_NEWS && (
-            <div className="mb-6 flex items-center justify-center animate-in fade-in slide-in-from-top-2">
-                <div className="bg-white border border-blue-100 shadow-lg shadow-blue-500/10 px-5 py-3 rounded-full flex items-center gap-3">
-                    <div className="relative flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+            {isCustomInputVisible && (
+                <div className="mb-6 -mt-4 animate-in fade-in slide-in-from-top-2">
+                    <div className="relative">
+                        <Edit3 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                        <input 
+                            type="text" 
+                            placeholder="输入额外想关注的主题（例如：人工智能、欧洲杯）" 
+                            className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                            value={customFocusInput}
+                            onChange={(e) => setCustomFocusInput(e.target.value)}
+                        />
                     </div>
-                    <span className="text-sm text-slate-600 font-medium">
-                        正在搜索：
-                        <span className="text-slate-900 font-bold ml-1">{activeSegment || '初始化...'}</span>
-                    </span>
-                    <span className="text-xs text-slate-400 border-l border-slate-200 pl-3">
-                        {completedTasks} / {totalTasks}
-                    </span>
                 </div>
-            </div>
-        )}
+            )}
 
-        {/* Layout: Vertical Stack */}
-        <div className="flex flex-col gap-8">
-          
-          {/* 1. Briefing Section (Top) */}
-          <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-             <BriefingView 
-                status={status}
-                summary={summaryText}
-             />
-          </section>
+            {status === AppStatus.ERROR && (
+                <div className="mb-8 bg-red-50 text-red-600 p-4 rounded-xl border border-red-100 flex items-center justify-between animate-in fade-in slide-in-from-top-4">
+                    <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                        <span className="text-sm font-medium">{errorMsg}</span>
+                    </div>
+                    <button onClick={handleStartBriefing} className="text-sm underline font-semibold hover:text-red-700">重试</button>
+                </div>
+            )}
 
-          {/* 2. News Timeline Section (Bottom) */}
-          {(status === AppStatus.READY || status === AppStatus.FETCHING_NEWS || status === AppStatus.ANALYZING || news.length > 0) && (
-            <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-                <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-4">
-                    <div>
-                        <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                            <Zap className="w-5 h-5 text-amber-500 fill-amber-500" />
-                            实时情报流
-                        </h2>
-                        <div className="flex items-center gap-2 mt-1">
-                             <p className="text-slate-500 text-sm">
-                                 {new Date().toLocaleDateString('zh-CN')} 
-                             </p>
-                             <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                共 {news.length} 条
-                            </span>
+            {/* Live Status Indicator (Shown during fetching) */}
+            {status === AppStatus.FETCHING_NEWS && (
+                <div className="mb-6 flex items-center justify-center animate-in fade-in slide-in-from-top-2">
+                    <div className="bg-white border border-blue-100 shadow-lg shadow-blue-500/10 px-5 py-3 rounded-full flex items-center gap-3">
+                        <div className="relative flex h-3 w-3">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
                         </div>
+                        <span className="text-sm text-slate-600 font-medium">
+                            正在搜索：
+                            <span className="text-slate-900 font-bold ml-1">{activeSegment || '初始化...'}</span>
+                        </span>
+                        <span className="text-xs text-slate-400 border-l border-slate-200 pl-3">
+                            {completedTasks} / {totalTasks}
+                        </span>
                     </div>
-                    {status === AppStatus.FETCHING_NEWS && (
-                         <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
-                    )}
                 </div>
-                
-                <NewsTimeline 
-                    news={news} 
-                    loading={status === AppStatus.FETCHING_NEWS && news.length === 0} 
-                />
-                
-                {/* Scroll Anchor */}
-                <div ref={bottomRef}></div>
-            </section>
-          )}
+            )}
 
-        </div>
+            {/* Layout: Vertical Stack */}
+            <div className="flex flex-col gap-8">
+            
+            {/* 1. Briefing Section (Top) */}
+            <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                <BriefingView 
+                    status={status}
+                    summary={summaryText}
+                />
+            </section>
+
+            {/* 2. News Timeline Section (Bottom) */}
+            {(status === AppStatus.READY || status === AppStatus.FETCHING_NEWS || status === AppStatus.ANALYZING || news.length > 0) && (
+                <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
+                    <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                                <Zap className="w-5 h-5 text-amber-500 fill-amber-500" />
+                                实时情报流
+                            </h2>
+                            <div className="flex items-center gap-2 mt-1">
+                                <p className="text-slate-500 text-sm">
+                                    {new Date().toLocaleDateString('zh-CN')} 
+                                </p>
+                                <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
+                                    共 {news.length} 条
+                                </span>
+                            </div>
+                        </div>
+                        {status === AppStatus.FETCHING_NEWS && (
+                            <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                        )}
+                    </div>
+                    
+                    <NewsTimeline 
+                        news={news} 
+                        loading={status === AppStatus.FETCHING_NEWS && news.length === 0} 
+                    />
+                    
+                    {/* Scroll Anchor */}
+                    <div ref={bottomRef}></div>
+                </section>
+            )}
+
+            </div>
+        </>
+        )}
       </div>
     </div>
   );

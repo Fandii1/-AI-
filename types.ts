@@ -1,3 +1,4 @@
+
 export interface NewsSource {
   title: string;
   uri: string;
@@ -19,6 +20,21 @@ export enum AppStatus {
   ANALYZING = 'ANALYZING',
   READY = 'READY',
   ERROR = 'ERROR'
+}
+
+export enum AppMode {
+  NEWS = 'NEWS',
+  TRAVEL = 'TRAVEL'
+}
+
+export type TravelType = 'PLAN' | 'FOOD';
+
+export interface TravelRequest {
+  destination: string;
+  type: TravelType;
+  duration?: number; // Days, for PLAN
+  budget: 'budget' | 'standard' | 'luxury';
+  interests: string[];
 }
 
 export type AIProvider = 'gemini' | 'openai';

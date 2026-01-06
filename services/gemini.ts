@@ -1,5 +1,6 @@
+
 import { GoogleGenAI } from "@google/genai";
-import { NewsItem, DurationOption, AppSettings } from "../types";
+import { NewsItem, DurationOption, AppSettings, TravelRequest } from "../types";
 
 // --- Generic Helpers ---
 
@@ -257,5 +258,123 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
         }
       });
       return response.text || "生成摘要失败。";
+  }
+}
+
+// 3. Generate Lifestyle (Travel/Food) Guide
+export async function generateLifestyleGuide(req: TravelRequest, settings: AppSettings): Promise<string> {
+  const effectiveKey = settings.apiKey || process.env.API_KEY;
+  if (!effectiveKey) throw new Error("Missing API Key");
+
+  const isPlan = req.type === 'PLAN';
+  const budgetMap = { budget: '经济穷游', standard: '舒适标准', luxury: '豪华享受' };
+  const budgetStr = budgetMap[req.budget];
+  const interestsStr = req.interests.length > 0 ? req.interests.join("、") : "大众经典";
+
+  const imageInstruction = `
+    【配图指令】：
+    为了增加吸引力，请在每个主要推荐点（如推荐的景点、餐厅或特色菜）之后，**单独起一行**，插入一张 Markdown 图片。
+    
+    使用以下格式插入真实的搜索图片（不要使用 AI 生成的）：
+    \`![{名称}](https://tse1.mm.bing.net/th?q={关键词}&w=800&h=450&c=7&rs=1&p=0)\`
+
+    重要：
+    1. **{关键词}**：请替换为该地点或美食的**具体中文名称+城市名**（例如"成都大熊猫基地"、"重庆老火锅"）。
+    2. **{名称}**：图片的描述。
+    3. 务必将图片链接单独放在一行。
+    4. 每个主要段落（如每天的行程、每个推荐餐厅）至少配一张图。
+  `;
+
+  let systemPrompt = "";
+  let userPrompt = "";
+
+  if (isPlan) {
+    systemPrompt = `你是一位深谙"小红书"和"大众点评"风格的资深旅行规划师。你的任务是为用户生成一份极具实操性、图文并茂的旅行攻略。语言风格要年轻、热情、干货满满。`;
+    userPrompt = `
+      请为我规划一次去【${req.destination}】的旅行。
+      
+      【基本信息】：
+      - 时长：${req.duration} 天
+      - 预算偏好：${budgetStr}
+      - 兴趣偏好：${interestsStr}
+      
+      【要求输出的内容】：
+      1. **🚩 路线概览**：一句话总结这次旅行的亮点。
+      2. **🗺️ 每日详细行程**：按第1天、第2天...的格式。每天必须包含：
+         - 景点顺序（考虑地理位置合理性）
+         - 建议游玩时长
+         - 交通连接建议
+         - (按指令插入真实景点图片)
+      3. **🏨 住宿避雷与推荐**：
+         - 推荐住在哪个区域最方便
+         - 针对${budgetStr}预算，推荐2-3家具体酒店或民宿类型（引用真实网络评价中的优缺点）。
+         - (插入酒店区域或氛围图片)
+      4. **🍜 沿途美食**：
+         - 结合行程，推荐每天顺路的必吃餐厅或小吃。
+         - 必须包含：餐厅名称、推荐菜、人均参考。
+         - (插入真实美食图片)
+      5. **💡 避坑与贴士**：
+         - 当地交通、穿衣、防骗、预约门票等实用信息。
+      
+      ${imageInstruction}
+      
+      请利用搜索工具获取最新的景点开放情况、门票价格和真实的用户评价。
+    `;
+  } else {
+    // Food Guide
+    systemPrompt = `你是一位拥有百万粉丝的美食探店博主，专注于发现地道美食。你的风格是客观毒舌但又充满热情，擅长挖掘本地人去的小店。请参考大众点评的评价体系。`;
+    userPrompt = `
+      请帮我整理一份【${req.destination}】的必吃美食指南。
+      
+      【筛选条件】：
+      - 预算水平：${budgetStr}
+      - 口味偏好：${interestsStr}
+      
+      【请输出以下板块】：
+      1. **🔥 本地特色科普**：${req.destination}有什么是必吃的？（介绍3-4种特色菜/小吃）。
+         - (请为每种特色菜插入一张真实图片)
+      2. **🏆 必吃榜单推荐**（请基于真实口碑推荐 5-8 家店）：
+         - **分类推荐**：例如【老字号】、【网红打卡】、【本地人食堂】、【性价比之王】。
+         - 每家店需包含：
+           - 🏠 店名
+           - 💰 人均消费
+           - 🥘 必点菜
+           - ⭐ 推荐理由（结合环境、口味、排队情况）
+           - 📍 大致位置
+           - (必须插入该店招牌菜或环境的图片)
+      3. **⚠️ 排雷指南**：有哪些名气大但不好吃的店，或者需要注意的消费陷阱。
+      
+      ${imageInstruction}
+      
+      请利用搜索工具查找最新的食客评价和餐厅营业状态。
+    `;
+  }
+
+  try {
+    if (settings.provider === 'openai') {
+        return await callOpenAICompatible(
+            settings.baseUrl,
+            effectiveKey,
+            settings.model,
+            [
+               { role: 'system', content: systemPrompt },
+               { role: 'user', content: userPrompt }
+            ]
+        );
+    } else {
+        const ai = getGeminiClient(effectiveKey);
+        const response = await ai.models.generateContent({
+          model: settings.model || 'gemini-2.0-flash',
+          contents: userPrompt,
+          config: {
+             systemInstruction: systemPrompt,
+             tools: [{ googleSearch: {} }] // Critical for live travel info
+          }
+        });
+        return response.text || "生成指南失败。";
+    }
+  } catch (e) {
+    console.error("Lifestyle API Error", e);
+    throw e;
   }
 }
