@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Newspaper, Settings, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3 } from 'lucide-react';
+import { Sparkles, Loader2, Newspaper, Settings, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle } from 'lucide-react';
 import { fetchDailyNews, generateNewsBriefing } from './services/gemini';
 import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
@@ -17,11 +17,8 @@ function App() {
   const [duration, setDuration] = useState<DurationOption>('medium');
   
   // Topic Selection State
-  // We use an array to support multi-select. Default to ['综合'].
   const [selectedTopics, setSelectedTopics] = useState<string[]>(['综合']);
   const [customFocusInput, setCustomFocusInput] = useState('');
-  // 'isCustomInputVisible' determines if the input box is shown, 
-  // usually when user wants to add custom topics.
   const [isCustomInputVisible, setIsCustomInputVisible] = useState(false);
 
   // Modals
@@ -30,7 +27,11 @@ function App() {
   
   // Settings State
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [hasApiKey, setHasApiKey] = useState(false);
+  
+  // Derived state for UI feedback
+  // Valid if user has a key OR if using Gemini with a built-in env key
+  const effectiveKey = settings.apiKey || (settings.provider === 'gemini' ? process.env.API_KEY : '');
+  const hasValidSetup = !!effectiveKey;
 
   // History State
   const [history, setHistory] = useState<BriefingSession[]>([]);
@@ -43,16 +44,11 @@ function App() {
     if (storedSettings) {
         try {
             const parsed = JSON.parse(storedSettings);
-            // Merge with default to ensure new fields (like searchSources) exist
             setSettings({ ...DEFAULT_SETTINGS, ...parsed });
-            if (parsed.apiKey) setHasApiKey(true);
         } catch (e) {
             console.error("Failed to load settings", e);
         }
-    } else if (process.env.API_KEY) {
-        setSettings(prev => ({ ...prev, apiKey: process.env.API_KEY || '' }));
-        setHasApiKey(true);
-    }
+    } 
 
     // History
     const storedHistory = localStorage.getItem('ai_brief_history');
@@ -60,7 +56,6 @@ function App() {
       try {
         const parsedHistory = JSON.parse(storedHistory);
         setHistory(parsedHistory);
-        // Automatically load the latest session if available
         if (parsedHistory.length > 0) {
             loadSession(parsedHistory[0]);
         }
@@ -72,7 +67,6 @@ function App() {
 
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
-    setHasApiKey(!!newSettings.apiKey);
     localStorage.setItem('ai_brief_settings', JSON.stringify(newSettings));
     if (status === AppStatus.ERROR) {
         setErrorMsg(null);
@@ -102,17 +96,13 @@ function App() {
       setSummaryText(session.summary);
       setDuration(session.durationOption);
       
-      // Load Focus
-      // Backward compatibility: if session.focus is string, convert to array
       let topics: string[] = [];
       if (Array.isArray(session.focus)) {
           topics = session.focus;
       } else if (typeof session.focus === 'string') {
-          // Legacy check
           if (['综合', '科技', '财经', '国内', '国际'].includes(session.focus as string)) {
               topics = [session.focus as string];
           } else {
-              // It was a custom topic
               topics = [session.focus as string];
               setCustomFocusInput(session.focus as string);
               setIsCustomInputVisible(true);
@@ -146,12 +136,6 @@ function App() {
   };
 
   const toggleTopic = (topicId: string) => {
-      // Logic: 
-      // 1. If "自定义" is clicked, toggle input visibility.
-      // 2. If '综合' is clicked, clear others and set '综合' (Exclusive mode usually expected for 'General', but let's allow mixing if user wants, 
-      //    though 'General' usually implies everything. Let's make '综合' mutually exclusive for better UX).
-      // 3. If other specific topics are clicked, toggle them. If '综合' was selected, unselect it.
-      
       if (topicId === '自定义') {
           setIsCustomInputVisible(!isCustomInputVisible);
           return;
@@ -162,10 +146,8 @@ function App() {
           return;
       }
 
-      // Specific topic clicked
       let newTopics = [...selectedTopics];
       
-      // Remove '综合' if present
       if (newTopics.includes('综合')) {
           newTopics = newTopics.filter(t => t !== '综合');
       }
@@ -176,7 +158,6 @@ function App() {
           newTopics.push(topicId);
       }
 
-      // If nothing selected, revert to '综合'
       if (newTopics.length === 0) {
           newTopics = ['综合'];
       }
@@ -191,45 +172,35 @@ function App() {
       setSummaryText("");
       setCurrentSessionId(undefined); 
       
-      // Prepare final topic list including custom input
       let finalTopics = [...selectedTopics];
       if (isCustomInputVisible && customFocusInput.trim()) {
-          // Add custom input to list if not already there (loosely)
           if (!finalTopics.includes(customFocusInput.trim())) {
               finalTopics.push(customFocusInput.trim());
           }
       }
       
-      // Step 1: Fetch News
+      // Step 1: Check Config
       setStatus(AppStatus.FETCHING_NEWS);
       
-      if (!settings.apiKey) {
-          if (settings.provider === 'gemini' && (window as any).aistudio?.hasSelectedApiKey) {
-             if (await (window as any).aistudio.hasSelectedApiKey()) {
-                 // Good
-             } else {
-                 throw new Error("请在设置中配置 API Key。");
-             }
-          } else if (!process.env.API_KEY) {
-               throw new Error("请在设置中配置 API Key。");
-          }
+      if (!effectiveKey) {
+          throw new Error("请先在设置中配置 API Key。");
       }
 
+      // Step 2: Fetch News (Using Selected Provider)
       const newsItems = await fetchDailyNews(settings, finalTopics);
       setNews(newsItems);
 
       if (newsItems.length === 0) {
-          throw new Error("未找到相关新闻，或解析失败，请重试。");
+          throw new Error("未搜索到相关新闻。请稍后重试，或检查 API Key 及网络。");
       }
 
-      // Step 2: Generate Summary (Briefing)
+      // Step 3: Generate Summary (Using Selected Provider)
       setStatus(AppStatus.ANALYZING);
       const text = await generateNewsBriefing(newsItems, duration, settings, finalTopics);
       setSummaryText(text);
 
       setStatus(AppStatus.READY);
       
-      // Save only if successful
       saveToHistory(newsItems, text, duration, finalTopics);
 
     } catch (err: any) {
@@ -237,10 +208,9 @@ function App() {
       const msg = err.message || JSON.stringify(err);
       let userMsg = "出错了，请稍后重试。";
       
-      if (msg.includes("API key") || msg.includes("403") || msg.includes("UNAUTHENTICATED") || msg.includes("401")) {
+      if (msg.includes("403") || msg.includes("UNAUTHENTICATED") || msg.includes("401")) {
          userMsg = "鉴权失败：API Key 无效。请检查设置。";
-         setHasApiKey(false);
-      } else if (msg.includes("500") || msg.includes("Internal Server Error")) {
+      } else if (msg.includes("500")) {
           userMsg = "AI 服务暂时繁忙 (500)，请稍后重试。";
       } else {
          userMsg = `出错了: ${msg.substring(0, 100)}`;
@@ -249,6 +219,15 @@ function App() {
       setErrorMsg(userMsg);
       setStatus(AppStatus.ERROR);
     }
+  };
+
+  const getStatusText = () => {
+      const providerName = settings.provider === 'gemini' ? 'Gemini' : 'Custom API';
+      switch(status) {
+          case AppStatus.FETCHING_NEWS: return `全网深度搜寻 (${providerName})...`;
+          case AppStatus.ANALYZING: return `AI 深度分析中 (${providerName})...`;
+          default: return "生成深度简报";
+      }
   };
 
   return (
@@ -284,7 +263,6 @@ function App() {
 
             <div className="flex items-center gap-2">
                  
-                 {/* Action Buttons */}
                  <button
                     onClick={() => setIsHistoryOpen(true)}
                     className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-blue-600 transition-colors relative"
@@ -297,11 +275,11 @@ function App() {
                  <button
                     onClick={() => setIsSettingsOpen(true)}
                     className={`p-2 hover:bg-slate-100 rounded-full transition-colors ${
-                        hasApiKey ? 'text-green-600' : 'text-slate-400'
+                        hasValidSetup ? 'text-green-600' : 'text-slate-400'
                     }`}
                     title="API 设置"
                  >
-                    {hasApiKey ? <CheckCircle2 className="w-5 h-5" /> : <Settings className="w-5 h-5" />}
+                    {hasValidSetup ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5 text-red-500" />}
                  </button>
 
                  <div className="h-6 w-px bg-slate-200 mx-1"></div>
@@ -320,7 +298,7 @@ function App() {
                    ) : (
                        <>
                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                         <span>分析中...</span>
+                         <span>{getStatusText()}</span>
                        </>
                    )}
                  </button>
@@ -334,7 +312,6 @@ function App() {
         {/* Controls Bar */}
         <div className="mb-8 bg-white rounded-2xl border border-slate-200 p-1 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-4 overflow-hidden">
             
-            {/* Topic Selector */}
             <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
                 {[
                     { id: '综合', icon: Globe, label: '综合' },
@@ -344,7 +321,6 @@ function App() {
                     { id: '财经', icon: TrendingUp, label: '财经' },
                     { id: '自定义', icon: Edit3, label: '自定义' },
                 ].map((item) => {
-                    // Check if selected
                     const isSelected = item.id === '自定义' 
                         ? isCustomInputVisible 
                         : selectedTopics.includes(item.id);
@@ -353,7 +329,7 @@ function App() {
                         <button
                             key={item.id}
                             onClick={() => toggleTopic(item.id)}
-                            disabled={status === AppStatus.FETCHING_NEWS || status === AppStatus.ANALYZING}
+                            disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
                             className={`flex items-center px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
                                isSelected
                                ? 'bg-slate-900 text-white shadow-md'
@@ -367,7 +343,6 @@ function App() {
                 })}
             </div>
 
-            {/* Duration Selector (Right side) */}
             <div className="flex items-center bg-slate-100 rounded-xl p-1 mx-2 mb-2 md:mb-0">
                 {(['short', 'medium', 'long'] as DurationOption[]).map((opt) => (
                     <button
@@ -386,7 +361,6 @@ function App() {
             </div>
         </div>
 
-        {/* Custom Input Expandable */}
         {isCustomInputVisible && (
             <div className="mb-6 -mt-4 animate-in fade-in slide-in-from-top-2">
                 <div className="relative">

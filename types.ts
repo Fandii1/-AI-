@@ -25,10 +25,13 @@ export type AIProvider = 'gemini' | 'openai';
 
 export interface AppSettings {
   provider: AIProvider;
-  baseUrl: string;
+  
+  // Unified credentials
   apiKey: string;
-  model: string;
-  searchSources: string[]; // Added: List of preferred search platforms
+  baseUrl: string; // Used for OpenAI compatible
+  model: string;   // Used for both
+
+  searchSources: string[];
 }
 
 export interface BriefingSession {
@@ -38,13 +41,13 @@ export interface BriefingSession {
   news: NewsItem[];
   summary: string;
   durationOption: DurationOption;
-  focus: string[]; // Changed: Supports multiple topics
+  focus: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   provider: 'gemini',
-  baseUrl: 'https://generativelanguage.googleapis.com',
-  apiKey: '', 
+  apiKey: '',
+  baseUrl: 'https://api.openai.com/v1',
   model: 'gemini-2.0-flash',
-  searchSources: ['Google News', 'Mainstream Media'] // Default sources
+  searchSources: ['Google News', 'Mainstream Media', 'Official Outlets']
 };
