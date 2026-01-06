@@ -108,7 +108,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       onClick={() => {
                           handleChange('provider', 'openai');
-                          // Reset to common defaults if switching
                           if (formData.baseUrl.includes('googleapis')) {
                               handleChange('baseUrl', 'https://api.openai.com/v1');
                               handleChange('model', 'gpt-4o');
@@ -150,7 +149,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
              ) : (
                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
                       <div className="space-y-2">
-                         <label className="text-sm font-semibold text-slate-700">API Endpoint (Base URL)</label>
+                         <label className="text-sm font-semibold text-slate-700">API Base URL</label>
                          <input
                             type="text"
                             value={formData.baseUrl}
@@ -158,7 +157,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             placeholder="https://api.openai.com/v1"
                             className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-sm font-mono"
                          />
-                         <p className="text-[10px] text-slate-500">例如: https://api.perplexity.ai (推荐用于新闻搜索)</p>
+                         <p className="text-[10px] text-slate-500">
+                            支持完整地址 (如 /v1/chat/completions) 或域名 (如 https://api.deepseek.com)。
+                         </p>
                       </div>
                       <div className="space-y-2">
                          <label className="text-sm font-semibold text-slate-700">模型名称</label>
@@ -177,7 +178,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
              <div className="space-y-2">
                  <div className="flex items-center justify-between">
                     <label className="text-sm font-semibold text-slate-700">API Key</label>
-                    <a href="#" className="text-xs text-blue-600 hover:underline">如何获取?</a>
                  </div>
                  <div className="relative">
                     <input

@@ -1,11 +1,44 @@
 import { GoogleGenAI } from "@google/genai";
 import { NewsItem, DurationOption, AppSettings } from "../types";
 
-// --- Helpers ---
+// --- Generic Helpers ---
 
 const getGeminiClient = (apiKey: string) => {
   return new GoogleGenAI({ apiKey });
 };
+
+// Robust URL constructor for OpenAI compatible endpoints
+const constructChatUrl = (baseUrl: string): string => {
+  let url = baseUrl.trim().replace(/\/$/, '');
+  
+  if (url.endsWith('/chat/completions')) {
+      return url;
+  }
+  
+  if (url.endsWith('/v1')) {
+      return `${url}/chat/completions`;
+  }
+  
+  return `${url}/v1/chat/completions`;
+};
+
+// Helper: Normalize date to YYYY-MM-DD
+// If invalid, defaults to fallbackDate
+function normalizeDate(rawDate: any, fallbackDate: string): string {
+    if (!rawDate) return fallbackDate;
+    
+    try {
+        const d = new Date(rawDate);
+        if (isNaN(d.getTime())) return fallbackDate;
+        
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    } catch (e) {
+        return fallbackDate;
+    }
+}
 
 async function callOpenAICompatible(
   baseUrl: string,
@@ -14,93 +47,76 @@ async function callOpenAICompatible(
   messages: Array<{ role: string, content: string }>,
   temperature: number = 0.7
 ): Promise<string> {
-  // Normalize URL
-  let url = baseUrl.replace(/\/$/, '');
-  if (!url.includes('/chat/completions')) {
-      if (url.endsWith('/v1')) {
-          url = `${url}/chat/completions`;
-      } else {
-          url = `${url}/v1/chat/completions`; 
+  
+  const url = constructChatUrl(baseUrl);
+  
+  try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: messages,
+          temperature: temperature,
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API Request Failed: [${response.status}] ${errText.substring(0, 200)}`);
       }
+
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content || "";
+
+  } catch (error: any) {
+      if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
+          throw new Error("网络请求失败 (CORS)。您的浏览器可能无法直接访问该 API 地址。请尝试使用支持 CORS 的代理地址，或检查网络连接。");
+      }
+      throw error;
   }
-
-  // Handle cases where user might put full path in baseUrl
-  if (baseUrl.includes('/chat/completions')) {
-      url = baseUrl;
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: messages,
-      temperature: temperature,
-      // Increase max tokens for long analysis
-      max_tokens: 4000 
-    })
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Custom API Error (${response.status}): ${err}`);
-  }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || "";
 }
 
-// 1. Fetch News
-// Now strictly follows settings.provider. 
-// Note: If using OpenAI/Custom, the model MUST have online capabilities (like Perplexity) to return real news.
-export async function fetchDailyNews(settings: AppSettings, topics: string[]): Promise<NewsItem[]> {
-  const today = new Date().toLocaleDateString('zh-CN');
+// 1. Fetch News by Topic (Single Segment)
+export async function fetchNewsByTopic(settings: AppSettings, topic: string): Promise<NewsItem[]> {
+  const now = new Date();
+  // Ensure YYYY-MM-DD format based on local time
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const dateStr = `${year}-${month}-${day}`;
   
-  // Determine effective Key
   const effectiveKey = settings.apiKey || process.env.API_KEY;
   if (!effectiveKey) {
       throw new Error("请配置 API Key");
   }
 
-  const validTopics = topics.filter(t => t.trim() !== '' && t !== '自定义');
-  
-  let focusInstruction = "";
-  if (validTopics.length === 0 || (validTopics.length === 1 && (validTopics[0] === '综合' || validTopics[0] === 'General'))) {
-      focusInstruction = `
-      【全方位覆盖指令】：
-      请务必均衡覆盖以下所有板块，不要局限于单一领域：
-      1. **国内时政与社会** (China Domestic) - 占比约 40%
-      2. **国际地缘政治与外交** (International) - 占比约 40%
-      3. **全球财经与科技前沿** (Finance & Tech) - 占比约 20%
-      `;
-  } else {
-      focusInstruction = `重点仅关注以下主题：【${validTopics.join("、")}】。在此主题下，请同时挖掘国内和国际的深度动态。`;
-  }
-
+  // Optimized prompt for strict timeliness and sub-topic focus
   const prompt = `
-    请作为一名全网新闻聚合引擎，搜索截至 ${today} 的过去 24-48 小时内的全球热点新闻。
-
-    【核心目标：海量 & 全面】
-    本次任务的目标是生成一份**极度详尽的新闻列表**。
-    1. **数量要求**：请尽全力搜集 **50 条以上** 的不同新闻事件。不要担心数量过多，越多越好。
-    2. **拒绝过滤**：只要是正规媒体报道的热点，都请列入。不要只挑选“头条”，次级热点同样重要。
-    3. **详细程度**：每条摘要需包含具体的时间、地点、人物或数据，字数在 50-80 字之间。
-
-    ${focusInstruction}
-
-    【输出格式】：
-    请直接返回一个纯 JSON 数组字符串，严禁包含 Markdown 标记（如 \`\`\`json）。
-    JSON 格式：
+    Role: Real-time News Engine.
+    Current Date: ${dateStr} (China Standard Time)
+    Target Micro-Topic: 【${topic}】
+    
+    Task: Search for the VERY LATEST headlines specifically about "${topic}".
+    
+    CRITICAL INSTRUCTIONS:
+    1. **LANGUAGE**: Output MUST be in **SIMPLIFIED CHINESE (简体中文)**. Even if sources are English, translate to Chinese.
+    2. **TIMELINESS**: 
+       - PRIMARY GOAL: Find news from **TODAY (${dateStr})**.
+       - SECONDARY GOAL: News from yesterday.
+       - FORBIDDEN: News older than 48 hours.
+    
+    Requirements:
+    1. Quantity: Find 8-12 distinct, high-impact items for this micro-topic.
+    2. Content: Focus on facts, numbers, and direct quotes.
+    3. Format: Strict JSON array.
+    
+    JSON Structure:
     [
-      { 
-        "headline": "新闻标题", 
-        "summary": "包含细节的详细摘要...", 
-        "category": "分类(如:国内、国际、财经、科技、社会)", 
-        "date": "YYYY-MM-DD" 
-      },
+      { "headline": "...", "summary": "...", "category": "${topic}", "date": "YYYY-MM-DD" },
       ...
     ]
   `;
@@ -110,19 +126,16 @@ export async function fetchDailyNews(settings: AppSettings, topics: string[]): P
 
   try {
       if (settings.provider === 'openai') {
-          // Custom / OpenAI Mode
-          // We send the prompt directly. The user should use an "Online" model (e.g., Perplexity sonar, or a GPT wrapper with tools)
           text = await callOpenAICompatible(
               settings.baseUrl,
               effectiveKey,
               settings.model,
               [
-                  { role: 'system', content: 'You are a real-time news aggregation engine. You have access to the latest internet information.' },
+                  { role: 'system', content: 'You are a real-time news API. Output strict JSON only. Language: Simplified Chinese.' },
                   { role: 'user', content: prompt }
               ]
           );
       } else {
-          // Gemini Mode
           const ai = getGeminiClient(effectiveKey);
           const response = await ai.models.generateContent({
             model: settings.model || 'gemini-2.0-flash',
@@ -135,90 +148,95 @@ export async function fetchDailyNews(settings: AppSettings, topics: string[]): P
           groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       }
 
-    // Parse JSON
     let newsItems: NewsItem[] = [];
     try {
-        // Clean markdown code blocks if present
-        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        let jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
         const startIndex = jsonStr.indexOf('[');
-        const endIndex = jsonStr.lastIndexOf(']');
+        let endIndex = jsonStr.lastIndexOf(']');
         
+        // Auto-Repair Truncated JSON
+        if (startIndex !== -1 && endIndex === -1) {
+             const lastBrace = jsonStr.lastIndexOf('}');
+             if (lastBrace > startIndex) {
+                 jsonStr = jsonStr.substring(0, lastBrace + 1) + ']';
+                 endIndex = jsonStr.length - 1;
+             }
+        }
+
         if (startIndex !== -1 && endIndex !== -1) {
             const cleanJson = jsonStr.substring(startIndex, endIndex + 1);
             const parsed = JSON.parse(cleanJson);
 
-            // Create sources pool (Gemini specific, or generic for OpenAI)
             const validSources = groundingChunks
                 .filter((c: any) => c.web?.uri && c.web?.title)
                 .map((c: any) => ({ title: c.web.title, uri: c.web.uri }));
 
-            newsItems = parsed.map((item: any) => ({
-                headline: item.headline || "无标题",
-                summary: item.summary || "暂无摘要",
-                category: item.category || "热点",
-                date: item.date || new Date().toISOString().split('T')[0],
-                sources: validSources 
-            }));
-        } else {
-             console.warn("No JSON array found in response");
-             // Fallback: If text is not JSON, maybe the model just wrote a list. 
-             // For now, return empty to trigger error in UI.
-             newsItems = [];
+            if (Array.isArray(parsed)) {
+                newsItems = parsed.map((item: any) => ({
+                    headline: item.headline || "无标题",
+                    summary: item.summary || "暂无摘要",
+                    category: item.category || topic,
+                    // Safe normalization to prevent "Invalid Date"
+                    date: normalizeDate(item.date, dateStr),
+                    sources: validSources 
+                }));
+            }
         }
-
     } catch (e) {
-        console.error("Failed to parse news JSON", e);
-        console.log("Raw text:", text);
+        console.error(`Failed to parse news JSON for topic ${topic}`, e);
         newsItems = [];
     }
 
     return newsItems;
 
   } catch (error) {
-    console.error("News Fetch Error:", error);
-    throw error;
+    console.error(`News Fetch Error (${topic}):`, error);
+    return [];
   }
 }
 
 // 2. Generate Briefing Summary
 export async function generateNewsBriefing(news: NewsItem[], duration: DurationOption, settings: AppSettings, topics: string[]): Promise<string> {
   
-  // Format inputs
-  const newsContext = news.map((n, i) => `${i+1}. [${n.date}] [${n.category}] ${n.headline}: ${n.summary}`).join("\n");
+  const MAX_ITEMS = 150; 
+  const processedNews = news.slice(0, MAX_ITEMS);
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
+  
+  const newsContext = processedNews.map((n, i) => `${i+1}. [${n.date}] [${n.category}] ${n.headline}: ${n.summary}`).join("\n");
   
   let lengthInstruction = "";
   switch(duration) {
-      case 'short': lengthInstruction = "总字数约 800-1000 字。"; break;
-      case 'medium': lengthInstruction = "总字数约 1500-2000 字，内容需详实。"; break;
-      case 'long': lengthInstruction = "总字数 3000 字以上，极度深度和全面。"; break;
+      case 'short': lengthInstruction = "字数 1000 字左右，快节奏。"; break;
+      case 'medium': lengthInstruction = "字数 2000 字左右，兼顾深度。"; break;
+      case 'long': lengthInstruction = "字数 3500 字以上，极度详尽，如同智库报告。"; break;
   }
 
-  const validTopics = topics.filter(t => t.trim() !== '' && t !== '自定义');
-  const topicDesc = validTopics.length > 0 && !validTopics.includes('综合') 
-    ? `关于“${validTopics.join('、')}”领域` 
-    : "综合";
-
-  // Determine effective Key
   const effectiveKey = settings.apiKey || process.env.API_KEY;
   if (!effectiveKey) throw new Error("Missing API Key");
 
-  const systemPrompt = `你是一位世界顶级的国际新闻主编和情报分析师。你的任务是根据提供的大量碎片化新闻线索，编写一份逻辑严密、深度极高的《每日全球情报简报》。`;
-
+  const systemPrompt = `你是一位世界顶级的中文新闻主编。今天是 ${dateStr}。任务是将碎片化新闻重组为一份逻辑严密、深度极高的《今日情报简报》。请全程使用简体中文。`;
+  
   const userPrompt = `
-    请根据以下 ${news.length} 条${topicDesc}新闻素材，撰写今日简报。
+    请根据以下 ${processedNews.length} 条新闻素材，撰写今日深度简报。
 
-    【撰写要求】：
-    1. **覆盖率优先**：素材中有 ${news.length} 条新闻，请务必**涵盖其中 80% 以上的内容**。不要只挑几条写，而要进行高密度的信息整合。
-    2. **分类整合**：请将新闻按逻辑板块（如：🇨🇳 中国焦点、🌏 全球局势、💹 经济与科技、🛡️ 冲突与安全）进行归类，而不是流水账。
-    3. **深度分析**：在每个板块后，增加一段“分析师点评”，解读背后的趋势。
-    4. **格式美观**：使用 Markdown，包括各级标题、粗体强调和列表。
-    5. **长度要求**：${lengthInstruction}
+    【核心指令】：
+    1. **语言**：必须使用**简体中文**。
+    2. **时效性优先**：重点突出“今天”发生的重大进展。
+    3. **深度整合**：将相关联的新闻（例如同一事件的不同侧面）合并分析，不要做流水账。
+    4. **板块划分**：请清晰划分为：
+       - 🚨 今日头条 (Breaking News)
+       - 🇨🇳 国内动态 (China Focus)
+       - 🌏 国际局势 (Global Affairs)
+       - 💹 财经与科技 (Business & Tech)
+       - 🔮 趋势研判 (Analyst's Take)
+    5. **分析师点评**：在每个板块末尾，必须加上“分析师点评”，揭示新闻背后的逻辑或未来几天的走势。
+    6. **长度**：${lengthInstruction}
 
-    【新闻素材列表】：
+    【新闻素材】：
     ${newsContext}
   `;
 
-  // Dispatch based on provider
   if (settings.provider === 'openai') {
       return await callOpenAICompatible(
           settings.baseUrl,
@@ -230,7 +248,6 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
           ]
       );
   } else {
-      // Default to Gemini
       const ai = getGeminiClient(effectiveKey);
       const response = await ai.models.generateContent({
         model: settings.model || 'gemini-2.0-flash',

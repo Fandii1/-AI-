@@ -1,17 +1,32 @@
-import React, { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Newspaper, Settings, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle } from 'lucide-react';
-import { fetchDailyNews, generateNewsBriefing } from './services/gemini';
+import React, { useState, useEffect, useRef } from 'react';
+import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap } from 'lucide-react';
+import { fetchNewsByTopic, generateNewsBriefing } from './services/gemini';
 import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
 import { BriefingView } from './components/BriefingView';
 import { SettingsModal } from './components/SettingsModal';
 import { HistorySidebar } from './components/HistorySidebar';
 
+// Sub-topic mapping for granular fetching
+const TOPIC_SUBDIVISIONS: Record<string, string[]> = {
+    '综合': ['今日头条', '国际焦点', '国内要闻', '科技前沿', '财经热点'],
+    '国内': ['时政要闻', '社会民生', '政策法规'],
+    '国际': ['地缘政治', '外交动态', '海外突发'],
+    '科技': ['人工智能', '互联网巨头', '硬科技', '生物医药'],
+    '财经': ['股市行情', '宏观经济', '企业动态'],
+};
+
 function App() {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
+  const [loadingText, setLoadingText] = useState<string>("准备就绪");
   const [news, setNews] = useState<NewsItem[]>([]);
   const [summaryText, setSummaryText] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
+  // Progress State
+  const [completedTasks, setCompletedTasks] = useState<number>(0);
+  const [totalTasks, setTotalTasks] = useState<number>(0);
+  const [activeSegment, setActiveSegment] = useState<string>("");
   
   // Options
   const [duration, setDuration] = useState<DurationOption>('medium');
@@ -28,18 +43,15 @@ function App() {
   // Settings State
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   
-  // Derived state for UI feedback
-  // Valid if user has a key OR if using Gemini with a built-in env key
   const effectiveKey = settings.apiKey || (settings.provider === 'gemini' ? process.env.API_KEY : '');
   const hasValidSetup = !!effectiveKey;
 
-  // History State
   const [history, setHistory] = useState<BriefingSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
+  
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Load settings and history on mount
   useEffect(() => {
-    // Settings
     const storedSettings = localStorage.getItem('ai_brief_settings');
     if (storedSettings) {
         try {
@@ -50,7 +62,6 @@ function App() {
         }
     } 
 
-    // History
     const storedHistory = localStorage.getItem('ai_brief_history');
     if (storedHistory) {
       try {
@@ -100,13 +111,7 @@ function App() {
       if (Array.isArray(session.focus)) {
           topics = session.focus;
       } else if (typeof session.focus === 'string') {
-          if (['综合', '科技', '财经', '国内', '国际'].includes(session.focus as string)) {
-              topics = [session.focus as string];
-          } else {
-              topics = [session.focus as string];
-              setCustomFocusInput(session.focus as string);
-              setIsCustomInputVisible(true);
-          }
+          topics = [session.focus as string];
       } else {
           topics = ['综合'];
       }
@@ -115,6 +120,8 @@ function App() {
       setCurrentSessionId(session.id);
       setStatus(AppStatus.READY);
       setErrorMsg(null);
+      setCompletedTasks(0);
+      setTotalTasks(0);
   };
 
   const deleteSession = (id: string, e: React.MouseEvent) => {
@@ -171,37 +178,87 @@ function App() {
       setNews([]);
       setSummaryText("");
       setCurrentSessionId(undefined); 
+      setCompletedTasks(0);
       
-      let finalTopics = [...selectedTopics];
+      let requestedTopics = [...selectedTopics];
       if (isCustomInputVisible && customFocusInput.trim()) {
-          if (!finalTopics.includes(customFocusInput.trim())) {
-              finalTopics.push(customFocusInput.trim());
+          if (!requestedTopics.includes(customFocusInput.trim())) {
+              requestedTopics.push(customFocusInput.trim());
           }
       }
-      
-      // Step 1: Check Config
-      setStatus(AppStatus.FETCHING_NEWS);
       
       if (!effectiveKey) {
           throw new Error("请先在设置中配置 API Key。");
       }
 
-      // Step 2: Fetch News (Using Selected Provider)
-      const newsItems = await fetchDailyNews(settings, finalTopics);
-      setNews(newsItems);
+      // --- Granular Segment Logic ---
+      setStatus(AppStatus.FETCHING_NEWS);
+      
+      // Breakdown topics into smaller chunks for parallel fetching and UI updates
+      let searchSegments: string[] = [];
+      
+      requestedTopics.forEach(mainTopic => {
+          if (TOPIC_SUBDIVISIONS[mainTopic]) {
+              searchSegments.push(...TOPIC_SUBDIVISIONS[mainTopic]);
+          } else {
+              searchSegments.push(mainTopic);
+          }
+      });
+      
+      // Deduplicate
+      searchSegments = [...new Set(searchSegments)];
+      setTotalTasks(searchSegments.length);
 
-      if (newsItems.length === 0) {
-          throw new Error("未搜索到相关新闻。请稍后重试，或检查 API Key 及网络。");
+      // Execute fetches
+      const fetchPromises = searchSegments.map(async (topic) => {
+          try {
+              setActiveSegment(topic);
+              const items = await fetchNewsByTopic(settings, topic);
+              
+              // Incrementally update UI
+              setCompletedTasks(prev => prev + 1);
+              if (items.length > 0) {
+                  setNews(prev => {
+                      const existingHeadlines = new Set(prev.map(n => n.headline));
+                      const newItems = items.filter(n => !existingHeadlines.has(n.headline));
+                      // Sort by date desc just in case
+                      return [...prev, ...newItems].sort((a,b) => b.date.localeCompare(a.date));
+                  });
+              }
+              return items;
+          } catch (e) {
+              console.error(`Error fetching topic ${topic}`, e);
+              setCompletedTasks(prev => prev + 1);
+              return [];
+          }
+      });
+
+      setLoadingText("正在启动并行搜索矩阵...");
+      
+      const results = await Promise.all(fetchPromises);
+      const allNews = results.flat();
+
+      if (allNews.length === 0) {
+          throw new Error("未能获取任何新闻。请检查 API Key、网络或更换模型。");
       }
 
-      // Step 3: Generate Summary (Using Selected Provider)
+      // Scroll to bottom to show news appearing
+      if(bottomRef.current) {
+          bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Step 3: Generate Summary
       setStatus(AppStatus.ANALYZING);
-      const text = await generateNewsBriefing(newsItems, duration, settings, finalTopics);
+      setActiveSegment("AI 深度聚合分析");
+      setLoadingText("正在进行全量深度分析...");
+      
+      const text = await generateNewsBriefing(allNews, duration, settings, requestedTopics);
       setSummaryText(text);
 
       setStatus(AppStatus.READY);
+      setLoadingText("完成");
       
-      saveToHistory(newsItems, text, duration, finalTopics);
+      saveToHistory(allNews, text, duration, requestedTopics);
 
     } catch (err: any) {
       console.error(err);
@@ -222,12 +279,12 @@ function App() {
   };
 
   const getStatusText = () => {
-      const providerName = settings.provider === 'gemini' ? 'Gemini' : 'Custom API';
-      switch(status) {
-          case AppStatus.FETCHING_NEWS: return `全网深度搜寻 (${providerName})...`;
-          case AppStatus.ANALYZING: return `AI 深度分析中 (${providerName})...`;
-          default: return "生成深度简报";
+      if (status === AppStatus.FETCHING_NEWS) {
+          const percent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+          return `搜索中 (${percent}%)`;
       }
+      if (status === AppStatus.ANALYZING) return "正在撰写...";
+      return "生成深度简报";
   };
 
   return (
@@ -250,7 +307,7 @@ function App() {
       />
 
       {/* Navbar */}
-      <nav className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm backdrop-blur-md bg-white/90">
+      <nav className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm backdrop-blur-md bg-white/90 transition-all duration-300">
           <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
             <div className="flex items-center gap-3">
                 <div className="bg-slate-900 p-2 rounded-lg text-white shadow-lg shadow-slate-900/20">
@@ -287,8 +344,12 @@ function App() {
                  <button 
                     onClick={handleStartBriefing}
                     disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 rounded-full text-sm font-bold transition-all flex items-center shadow-lg shadow-blue-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none whitespace-nowrap"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 md:px-6 py-2 rounded-full text-sm font-bold transition-all flex items-center shadow-lg shadow-blue-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none whitespace-nowrap overflow-hidden relative"
                  >
+                   {status === AppStatus.FETCHING_NEWS && (
+                        <div className="absolute left-0 bottom-0 h-1 bg-blue-400 transition-all duration-300" style={{ width: `${(completedTasks / totalTasks) * 100}%` }}></div>
+                   )}
+                   
                    {status === AppStatus.IDLE || status === AppStatus.READY || status === AppStatus.ERROR ? (
                        <>
                          <Sparkles className="w-4 h-4 mr-2" />
@@ -298,7 +359,7 @@ function App() {
                    ) : (
                        <>
                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                         <span>{getStatusText()}</span>
+                         <span className="min-w-[80px] text-center">{getStatusText()}</span>
                        </>
                    )}
                  </button>
@@ -314,7 +375,7 @@ function App() {
             
             <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
                 {[
-                    { id: '综合', icon: Globe, label: '综合' },
+                    { id: '综合', icon: Globe, label: '综合 (全网)' },
                     { id: '国内', icon: Hash, label: '国内' },
                     { id: '国际', icon: Globe, label: '国际' },
                     { id: '科技', icon: Cpu, label: '科技' },
@@ -386,6 +447,25 @@ function App() {
             </div>
         )}
 
+        {/* Live Status Indicator (Shown during fetching) */}
+        {status === AppStatus.FETCHING_NEWS && (
+            <div className="mb-6 flex items-center justify-center animate-in fade-in slide-in-from-top-2">
+                <div className="bg-white border border-blue-100 shadow-lg shadow-blue-500/10 px-5 py-3 rounded-full flex items-center gap-3">
+                    <div className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                    </div>
+                    <span className="text-sm text-slate-600 font-medium">
+                        正在搜索：
+                        <span className="text-slate-900 font-bold ml-1">{activeSegment || '初始化...'}</span>
+                    </span>
+                    <span className="text-xs text-slate-400 border-l border-slate-200 pl-3">
+                        {completedTasks} / {totalTasks}
+                    </span>
+                </div>
+            </div>
+        )}
+
         {/* Layout: Vertical Stack */}
         <div className="flex flex-col gap-8">
           
@@ -402,25 +482,31 @@ function App() {
             <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
                 <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-4">
                     <div>
-                        <h2 className="text-xl font-bold text-slate-900">新闻素材源</h2>
+                        <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                            <Zap className="w-5 h-5 text-amber-500 fill-amber-500" />
+                            实时情报流
+                        </h2>
                         <div className="flex items-center gap-2 mt-1">
-                             <p className="text-slate-500 text-sm flex items-center gap-1">
-                                 {selectedTopics.join('、')}
-                                 {isCustomInputVisible && customFocusInput && ` + ${customFocusInput}`}
+                             <p className="text-slate-500 text-sm">
+                                 {new Date().toLocaleDateString('zh-CN')} 
                              </p>
-                             {status === AppStatus.READY && (
-                                <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
-                                    {news.length} 篇
-                                </span>
-                             )}
+                             <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200">
+                                共 {news.length} 条
+                            </span>
                         </div>
                     </div>
+                    {status === AppStatus.FETCHING_NEWS && (
+                         <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                    )}
                 </div>
                 
                 <NewsTimeline 
                     news={news} 
-                    loading={status === AppStatus.FETCHING_NEWS} 
+                    loading={status === AppStatus.FETCHING_NEWS && news.length === 0} 
                 />
+                
+                {/* Scroll Anchor */}
+                <div ref={bottomRef}></div>
             </section>
           )}
 
