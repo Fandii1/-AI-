@@ -50,7 +50,11 @@ function App() {
   // Settings State
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   
-  const effectiveKey = settings.apiKey || (settings.provider === 'gemini' ? process.env.API_KEY : '');
+  // Determine if we have a valid key for the current provider
+  const effectiveKey = settings.apiKey || 
+                       (settings.provider === 'gemini' ? process.env.API_KEY : 
+                       (settings.provider === 'deepseek' ? process.env.DEEPSEEK_API_KEY : ''));
+
   const hasValidSetup = !!effectiveKey;
 
   const [history, setHistory] = useState<BriefingSession[]>([]);

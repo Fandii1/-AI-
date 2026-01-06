@@ -8,6 +8,21 @@ const getGeminiClient = (apiKey: string) => {
   return new GoogleGenAI({ apiKey });
 };
 
+// Helper: Get effective API Key based on provider
+const getEffectiveKey = (settings: AppSettings): string => {
+    if (settings.apiKey) return settings.apiKey;
+    
+    if (settings.provider === 'gemini') {
+        return process.env.API_KEY || '';
+    }
+    
+    if (settings.provider === 'deepseek') {
+        return process.env.DEEPSEEK_API_KEY || '';
+    }
+    
+    return '';
+};
+
 // Robust URL constructor for OpenAI compatible endpoints
 const constructChatUrl = (baseUrl: string): string => {
   let url = baseUrl.trim().replace(/\/$/, '');
@@ -20,7 +35,8 @@ const constructChatUrl = (baseUrl: string): string => {
       return `${url}/chat/completions`;
   }
   
-  return `${url}/v1/chat/completions`;
+  // Handle bare domain like 'https://api.deepseek.com'
+  return `${url}/chat/completions`;
 };
 
 // Helper: Normalize date to YYYY-MM-DD
@@ -62,6 +78,7 @@ async function callOpenAICompatible(
           model: model,
           messages: messages,
           temperature: temperature,
+          stream: false
         })
       });
 
@@ -90,9 +107,9 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
   const day = String(now.getDate()).padStart(2, '0');
   const dateStr = `${year}-${month}-${day}`;
   
-  const effectiveKey = settings.apiKey || process.env.API_KEY;
+  const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) {
-      throw new Error("请配置 API Key");
+      throw new Error(`请配置 ${settings.provider === 'deepseek' ? 'DeepSeek' : 'AI'} API Key`);
   }
 
   // Optimized prompt for strict timeliness and sub-topic focus
@@ -126,7 +143,7 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
   let groundingChunks: any[] = [];
 
   try {
-      if (settings.provider === 'openai') {
+      if (settings.provider === 'openai' || settings.provider === 'deepseek') {
           text = await callOpenAICompatible(
               settings.baseUrl,
               effectiveKey,
@@ -152,6 +169,10 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
     let newsItems: NewsItem[] = [];
     try {
         let jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        // Remove DeepSeek <think> tags if present
+        jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, '');
+        
         const startIndex = jsonStr.indexOf('[');
         let endIndex = jsonStr.lastIndexOf(']');
         
@@ -213,7 +234,7 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
       case 'long': lengthInstruction = "字数 3500 字以上，极度详尽，如同智库报告。"; break;
   }
 
-  const effectiveKey = settings.apiKey || process.env.API_KEY;
+  const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) throw new Error("Missing API Key");
 
   const systemPrompt = `你是一位世界顶级的中文新闻主编。今天是 ${dateStr}。任务是将碎片化新闻重组为一份逻辑严密、深度极高的《今日情报简报》。请全程使用简体中文。`;
@@ -238,8 +259,8 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
     ${newsContext}
   `;
 
-  if (settings.provider === 'openai') {
-      return await callOpenAICompatible(
+  if (settings.provider === 'openai' || settings.provider === 'deepseek') {
+      let text = await callOpenAICompatible(
           settings.baseUrl,
           effectiveKey,
           settings.model,
@@ -248,6 +269,8 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
              { role: 'user', content: userPrompt }
           ]
       );
+      // Clean <think> tags for DeepSeek R1
+      return text.replace(/<think>[\s\S]*?<\/think>/g, '');
   } else {
       const ai = getGeminiClient(effectiveKey);
       const response = await ai.models.generateContent({
@@ -263,7 +286,7 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
 
 // 3. Generate Lifestyle (Travel/Food) Guide
 export async function generateLifestyleGuide(req: TravelRequest, settings: AppSettings): Promise<string> {
-  const effectiveKey = settings.apiKey || process.env.API_KEY;
+  const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) throw new Error("Missing API Key");
 
   const isPlan = req.type === 'PLAN';
@@ -351,8 +374,8 @@ export async function generateLifestyleGuide(req: TravelRequest, settings: AppSe
   }
 
   try {
-    if (settings.provider === 'openai') {
-        return await callOpenAICompatible(
+    if (settings.provider === 'openai' || settings.provider === 'deepseek') {
+        let text = await callOpenAICompatible(
             settings.baseUrl,
             effectiveKey,
             settings.model,
@@ -361,6 +384,7 @@ export async function generateLifestyleGuide(req: TravelRequest, settings: AppSe
                { role: 'user', content: userPrompt }
             ]
         );
+        return text.replace(/<think>[\s\S]*?<\/think>/g, '');
     } else {
         const ai = getGeminiClient(effectiveKey);
         const response = await ai.models.generateContent({

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart } from 'lucide-react';
+import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart, Brain } from 'lucide-react';
 import { AppSettings, DEFAULT_SETTINGS } from '../types';
 
 interface SettingsModalProps {
@@ -32,6 +32,11 @@ const RECOMMENDED_GEMINI_MODELS = [
   { value: 'gemini-2.0-pro-exp', label: 'Gemini 2.0 Pro Exp (强推理)' },
 ];
 
+const DEEPSEEK_MODELS = [
+  { value: 'deepseek-chat', label: 'DeepSeek V3 (快速/通用)' },
+  { value: 'deepseek-reasoner', label: 'DeepSeek R1 (深度推理)' },
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -39,7 +44,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   currentSettings,
 }) => {
   const [formData, setFormData] = useState<AppSettings>(currentSettings);
-  const hasBuiltInKey = !!process.env.API_KEY;
+  
+  const hasBuiltInGemini = !!process.env.API_KEY;
+  const hasBuiltInDeepSeek = !!process.env.DEEPSEEK_API_KEY;
 
   useEffect(() => {
     if (isOpen) {
@@ -83,6 +90,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     e.preventDefault();
     onSave(formData);
     onClose();
+  };
+
+  // Helper to determine if we should show "Built-in Key" status
+  const shouldUseBuiltIn = !formData.apiKey && (
+      (formData.provider === 'gemini' && hasBuiltInGemini) ||
+      (formData.provider === 'deepseek' && hasBuiltInDeepSeek)
+  );
+
+  const getPlaceholder = () => {
+      if (formData.provider === 'gemini' && hasBuiltInGemini) return "已内置 Gemini Key (可留空)";
+      if (formData.provider === 'deepseek' && hasBuiltInDeepSeek) return "已内置 DeepSeek Key (可留空)";
+      return "sk-...";
   };
 
   return (
@@ -132,41 +151,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <Cpu className="w-4 h-4 mr-2 text-blue-600" />
                   AI 服务提供商
               </label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                   <button
                       type="button"
                       onClick={() => {
                           handleChange('provider', 'gemini');
                           handleChange('model', 'gemini-2.0-flash');
                       }}
-                      className={`py-3 px-4 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
+                      className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'gemini' 
                           ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold ring-1 ring-blue-500' 
                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
                       }`}
                   >
                       <Zap className="w-5 h-5" />
-                      <span>Gemini (官方)</span>
-                      <span className="text-[10px] opacity-70 font-normal">支持 Google 实时搜索</span>
+                      <span className="text-xs">Gemini</span>
+                      <span className="text-[9px] opacity-70 font-normal">官方 / 联网强</span>
                   </button>
+                  
+                  <button
+                      type="button"
+                      onClick={() => {
+                          handleChange('provider', 'deepseek');
+                          handleChange('baseUrl', 'https://api.deepseek.com');
+                          handleChange('model', 'deepseek-chat');
+                      }}
+                      className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
+                          formData.provider === 'deepseek' 
+                          ? 'bg-indigo-50 border-indigo-500 text-indigo-700 font-bold ring-1 ring-indigo-500' 
+                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                      }`}
+                  >
+                      <Brain className="w-5 h-5" />
+                      <span className="text-xs">DeepSeek</span>
+                      <span className="text-[9px] opacity-70 font-normal">国内直连 / 推理</span>
+                  </button>
+
                   <button
                       type="button"
                       onClick={() => {
                           handleChange('provider', 'openai');
-                          if (formData.baseUrl.includes('googleapis')) {
+                          if (formData.baseUrl.includes('googleapis') || formData.baseUrl.includes('deepseek')) {
                               handleChange('baseUrl', 'https://api.openai.com/v1');
                               handleChange('model', 'gpt-4o');
                           }
                       }}
-                      className={`py-3 px-4 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
+                      className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'openai' 
                           ? 'bg-purple-50 border-purple-500 text-purple-700 font-bold ring-1 ring-purple-500' 
                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
                       }`}
                   >
                       <Server className="w-5 h-5" />
-                      <span>自定义 / OpenAI</span>
-                      <span className="text-[10px] opacity-70 font-normal">需使用联网模型(如 Perplexity)</span>
+                      <span className="text-xs">Custom</span>
+                      <span className="text-[9px] opacity-70 font-normal">OpenAI 兼容</span>
                   </button>
               </div>
           </div>
@@ -176,7 +214,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Dynamic Configuration Fields */}
           <div className="space-y-5">
              
-             {formData.provider === 'gemini' ? (
+             {formData.provider === 'gemini' && (
                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
                       <div className="space-y-2">
                           <label className="text-sm font-semibold text-slate-700">Gemini 模型</label>
@@ -191,7 +229,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </select>
                       </div>
                  </div>
-             ) : (
+             )}
+
+             {formData.provider === 'deepseek' && (
+                 <div className="space-y-4 animate-in fade-in slide-in-from-top-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="space-y-2">
+                          <label className="text-sm font-semibold text-slate-700">DeepSeek 模型</label>
+                          <select
+                            value={formData.model}
+                            onChange={(e) => handleChange('model', e.target.value)}
+                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                          >
+                             {DEEPSEEK_MODELS.map(m => (
+                                <option key={m.value} value={m.value}>{m.label}</option>
+                             ))}
+                          </select>
+                          <p className="text-[10px] text-slate-500">
+                             R1 模型适合深度推理分析，V3 模型响应速度更快。官方 API 不支持联网搜索。
+                          </p>
+                      </div>
+                      {/* Hidden Base URL for DeepSeek default, but kept in state */}
+                 </div>
+             )}
+
+             {formData.provider === 'openai' && (
                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
                       <div className="space-y-2">
                          <label className="text-sm font-semibold text-slate-700">API Base URL</label>
@@ -229,12 +290,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="password"
                     value={formData.apiKey}
                     onChange={(e) => handleChange('apiKey', e.target.value)}
-                    placeholder={hasBuiltInKey && formData.provider === 'gemini' ? "已内置 Gemini Key (可留空)" : "sk-..."}
+                    placeholder={getPlaceholder()}
                     className={`w-full pl-4 pr-10 py-2.5 bg-white border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono ${
-                        !formData.apiKey && hasBuiltInKey && formData.provider === 'gemini' ? 'border-green-300' : 'border-slate-300'
+                        shouldUseBuiltIn ? 'border-green-300' : 'border-slate-300'
                     }`}
                     />
-                    {!formData.apiKey && hasBuiltInKey && formData.provider === 'gemini' && (
+                    {shouldUseBuiltIn && (
                         <div className="absolute right-3 top-2.5 text-green-600">
                             <ShieldCheck className="w-5 h-5" />
                         </div>
