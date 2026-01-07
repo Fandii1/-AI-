@@ -18,6 +18,7 @@ export enum AppStatus {
   IDLE = 'IDLE',
   FETCHING_NEWS = 'FETCHING_NEWS',
   ANALYZING = 'ANALYZING',
+  GENERATING_PODCAST = 'GENERATING_PODCAST',
   READY = 'READY',
   ERROR = 'ERROR'
 }
@@ -47,6 +48,9 @@ export interface AppSettings {
   baseUrl: string; // Used for OpenAI compatible
   model: string;   // Used for both
 
+  // TTS Settings
+  ttsModel?: string; // Specific model for TTS
+
   searchSources: string[];
   userInterests: string[]; // For personalization
 }
@@ -59,13 +63,20 @@ export interface BriefingSession {
   summary: string;
   durationOption: DurationOption;
   focus: string[];
+  audioUrl?: string; // Optional podcast audio
+}
+
+export interface PodcastSegment {
+  speaker: string;
+  text: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   provider: 'tongyi',
   apiKey: '',
   baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  model: 'qwen-flash',
+  model: 'qwen-plus',
+  ttsModel: 'qwen3-tts-flash', // Default TTS model changed to qwen3-tts-flash
   searchSources: ['Google News', 'Mainstream Media', 'Official Outlets'],
   userInterests: ['科技', '财经']
 };

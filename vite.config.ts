@@ -6,10 +6,20 @@ import react from '@vitejs/plugin-react'
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   // This loads variables from .env files (local development).
-  const env = loadEnv(mode, process.cwd(), '');
+  const env = loadEnv(mode, (process as any).cwd(), '');
 
   return {
     plugins: [react()],
+    server: {
+      proxy: {
+        // Proxy /api/dashscope requests to the actual DashScope API to avoid CORS issues
+        '/api/dashscope': {
+          target: 'https://dashscope.aliyuncs.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/dashscope/, '')
+        }
+      }
+    },
     define: {
       // Injects process.env variables into the code during build.
       // CRITICAL FIX: We add `|| ""` to ensure undefined variables become empty strings

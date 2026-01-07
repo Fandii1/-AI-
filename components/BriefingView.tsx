@@ -1,52 +1,50 @@
 
 import React, { useState, useRef } from 'react';
-import { FileText, Sparkles, Copy, Check, Share2, Loader2, MessageSquare } from 'lucide-react';
+import { FileText, Sparkles, Share2, Loader2, MessageSquare, Headphones } from 'lucide-react';
 import { AppStatus } from '../types';
+import { PodcastPlayer } from './PodcastPlayer';
 
 interface BriefingViewProps {
   status: AppStatus;
   summary: string;
   onOpenShare: (content: string) => void;
+  onGeneratePodcast: () => void;
+  podcastUrl: string | null;
 }
 
 export const BriefingView: React.FC<BriefingViewProps> = ({ 
   status, 
   summary,
-  onOpenShare
+  onOpenShare,
+  onGeneratePodcast,
+  podcastUrl
 }) => {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const isAnalyzing = status === AppStatus.ANALYZING;
+  const isGeneratingPodcast = status === AppStatus.GENERATING_PODCAST;
 
   const handleShareImage = async () => {
     if (!contentRef.current) return;
     setIsGeneratingImage(true);
 
     try {
-        // Dynamic import to reduce initial bundle size
         const html2canvas = (await import('html2canvas')).default;
-
-        // Wait a bit to ensure fonts and UI render correctly
         await new Promise(resolve => setTimeout(resolve, 300));
-
-        // Fixed width for the generated image to ensure consistent "Card" look
-        // regardless of whether the user is on Mobile or Desktop.
         const EXPORT_WIDTH = 750; 
 
         const canvas = await html2canvas(contentRef.current, {
-            scale: 2, // Retina resolution
-            useCORS: true, // Handle cross-origin images if any
+            scale: 2,
+            useCORS: true,
             allowTaint: true,
             backgroundColor: '#ffffff',
-            // Force the canvas to be a specific width so text wraps nicely like a newspaper
             width: EXPORT_WIDTH, 
             windowWidth: EXPORT_WIDTH,
-            scrollY: -window.scrollY, // Fix scroll issue
+            scrollY: -window.scrollY,
             logging: false,
             onclone: (clonedDoc) => {
                 const element = clonedDoc.querySelector('.briefing-card') as HTMLElement;
                 if (element) {
-                    // Optimize styling for the static image
                     element.style.width = `${EXPORT_WIDTH}px`;
                     element.style.maxWidth = 'none';
                     element.style.margin = '0';
@@ -55,11 +53,13 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                     element.style.border = 'none';
                     element.style.padding = '40px'; 
                     
-                    // Hide interactive buttons in the clone
                     const btns = element.querySelector('.share-buttons');
                     if (btns) (btns as HTMLElement).style.display = 'none';
 
-                    // Prevent Image Stretching
+                    // Hide Podcast Player in image
+                    const player = element.querySelector('.podcast-section');
+                    if (player) (player as HTMLElement).style.display = 'none';
+
                     const images = element.querySelectorAll('img');
                     images.forEach((img: HTMLImageElement) => {
                          img.style.height = 'auto';
@@ -83,13 +83,9 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
     }
   };
 
-  // Basic Markdown-to-JSX renderer (lightweight)
   const renderMarkdown = (text: string) => {
     if (!text) return null;
-    
-    // Split by newlines to handle paragraphs
     return text.split('\n').map((line, index) => {
-      // Headers (##)
       if (line.startsWith('## ')) {
         return <h2 key={index} className="text-xl font-bold text-slate-800 mt-6 mb-3 border-l-4 border-blue-500 pl-3">{line.replace('## ', '')}</h2>;
       }
@@ -98,7 +94,6 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
       }
       if (line.startsWith('- ') || line.startsWith('* ')) {
           const content = line.substring(2);
-          // Handle bolding within list items
           const parts = content.split(/(\*\*.*?\*\*)/g);
           return (
               <li key={index} className="ml-4 list-disc text-slate-700 mb-1">
@@ -111,10 +106,7 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
               </li>
           );
       }
-      
-      // Regular paragraphs with Bold support
       if (line.trim() === '') return <br key={index} />;
-      
       const parts = line.split(/(\*\*.*?\*\*)/g);
       return (
         <p key={index} className="mb-3 text-slate-700 leading-relaxed">
@@ -129,7 +121,6 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
     });
   };
 
-  // Idle state design for top layout
   if (status === AppStatus.IDLE || status === AppStatus.FETCHING_NEWS) {
       return (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 md:p-12 text-center shadow-sm relative overflow-hidden group">
@@ -169,15 +160,34 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
           </div>
           
           <div className="flex items-center gap-2 share-buttons" data-html2canvas-ignore>
-            {status === AppStatus.READY && (
+            {(status === AppStatus.READY || status === AppStatus.GENERATING_PODCAST) && (
                 <>
+                <button 
+                    onClick={onGeneratePodcast}
+                    disabled={isGeneratingPodcast || !!podcastUrl}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-95 border ${
+                        podcastUrl 
+                        ? 'bg-blue-50 text-blue-600 border-blue-200 cursor-default' 
+                        : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
+                    }`}
+                >
+                    {isGeneratingPodcast ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                        <Headphones className="w-3.5 h-3.5" />
+                    )}
+                    {isGeneratingPodcast ? '生成中...' : (podcastUrl ? '播客已就绪' : '生成 AI 播客')}
+                </button>
+
+                <div className="w-px h-4 bg-slate-300 mx-1"></div>
+
                 <button 
                     onClick={() => onOpenShare(summary)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 transition-all active:scale-95"
                     title="自定义分享"
                 >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    编辑文案
+                    <span className="hidden sm:inline">编辑</span>
                 </button>
                 <button 
                     onClick={handleShareImage}
@@ -186,12 +196,8 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
                     title="生成长图"
                 >
                     {isGeneratingImage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                    {isGeneratingImage ? '生成中' : '存为长图'}
+                    <span className="hidden sm:inline">长图</span>
                 </button>
-                <span className="hidden md:flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold items-center">
-                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-                    分析完成
-                </span>
                 </>
             )}
           </div>
@@ -199,6 +205,13 @@ export const BriefingView: React.FC<BriefingViewProps> = ({
 
       {/* Content */}
       <div className="p-6 md:p-10 bg-white">
+        {/* Podcast Player Section */}
+        {podcastUrl && (
+            <div className="podcast-section mb-8 animate-in fade-in slide-in-from-top-4">
+                <PodcastPlayer audioUrl={podcastUrl} />
+            </div>
+        )}
+
         {isAnalyzing ? (
             <div className="space-y-8 animate-pulse max-w-4xl mx-auto">
                 <div className="flex items-center space-x-4">

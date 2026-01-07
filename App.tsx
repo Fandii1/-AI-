@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, RefreshCw, Zap, Map, Coffee, Heart } from 'lucide-react';
-import { fetchNewsByTopic, generateNewsBriefing } from './services/gemini';
-import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession, AppMode } from './types';
+import { Sparkles, Loader2, Newspaper, CheckCircle2, History as HistoryIcon, Globe, Cpu, TrendingUp, Hash, Edit3, AlertCircle, Map, Heart, Zap, Mic } from 'lucide-react';
+import { fetchNewsByTopic, generateNewsBriefing, generatePodcastScript, generatePodcastAudio } from './services/gemini';
+import { NewsItem, AppStatus, DurationOption, AppSettings, DEFAULT_SETTINGS, BriefingSession, AppMode, PodcastSegment } from './types';
 import { NewsTimeline } from './components/NewsTimeline';
 import { BriefingView } from './components/BriefingView';
 import { TravelView } from './components/TravelView';
@@ -28,6 +28,10 @@ function App() {
   const [summaryText, setSummaryText] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
+  // Podcast State
+  const [podcastAudioUrl, setPodcastAudioUrl] = useState<string | null>(null);
+  const [autoGeneratePodcast, setAutoGeneratePodcast] = useState<boolean>(true); // Default to true
+
   // Progress State
   const [completedTasks, setCompletedTasks] = useState<number>(0);
   const [totalTasks, setTotalTasks] = useState<number>(0);
@@ -36,8 +40,8 @@ function App() {
   // Options
   const [duration, setDuration] = useState<DurationOption>('medium');
   
-  // Topic Selection State
-  const [selectedTopics, setSelectedTopics] = useState<string[]>(['推荐']);
+  // Topic Selection State - Default to '综合' (Comprehensive) for "Domestic & Foreign News"
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(['综合']);
   const [customFocusInput, setCustomFocusInput] = useState('');
   const [isCustomInputVisible, setIsCustomInputVisible] = useState(false);
 
@@ -65,15 +69,29 @@ function App() {
 
   useEffect(() => {
     const storedSettings = localStorage.getItem('ai_brief_settings');
+    let loadedSettings = DEFAULT_SETTINGS;
+
     if (storedSettings) {
         try {
-            const parsed = JSON.parse(storedSettings);
-            // Merge with default to ensure new fields like userInterests exist
-            setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+            loadedSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(storedSettings) };
         } catch (e) {
             console.error("Failed to load settings", e);
         }
     } 
+
+    // Auto-fix: If current provider has no key, but environment has Gemini key, switch to Gemini
+    // This fixes the "Please configure API Key" error on first load
+    if (!loadedSettings.apiKey) {
+        const envGemini = process.env.API_KEY;
+        const envTongyi = process.env.TONGYI_API_KEY;
+
+        if (loadedSettings.provider === 'tongyi' && !envTongyi && envGemini) {
+             loadedSettings.provider = 'gemini';
+             loadedSettings.model = 'gemini-2.0-flash';
+        }
+    }
+
+    setSettings(loadedSettings);
 
     const storedHistory = localStorage.getItem('ai_brief_history');
     if (storedHistory) {
@@ -103,7 +121,7 @@ function App() {
       setIsShareModalOpen(true);
   };
 
-  const saveToHistory = (newsItems: NewsItem[], summary: string, dur: DurationOption, topics: string[]) => {
+  const saveToHistory = (newsItems: NewsItem[], summary: string, dur: DurationOption, topics: string[], audioUrl?: string) => {
       const newSession: BriefingSession = {
           id: Date.now().toString(),
           timestamp: Date.now(),
@@ -111,7 +129,8 @@ function App() {
           news: newsItems,
           summary: summary,
           durationOption: dur,
-          focus: topics
+          focus: topics,
+          audioUrl: audioUrl
       };
       
       const updatedHistory = [newSession, ...history];
@@ -120,10 +139,22 @@ function App() {
       localStorage.setItem('ai_brief_history', JSON.stringify(updatedHistory));
   };
 
+  const updateHistoryAudio = (sessionId: string, url: string) => {
+      const updatedHistory = history.map(h => {
+          if (h.id === sessionId) {
+              return { ...h, audioUrl: url };
+          }
+          return h;
+      });
+      setHistory(updatedHistory);
+      localStorage.setItem('ai_brief_history', JSON.stringify(updatedHistory));
+  };
+
   const loadSession = (session: BriefingSession) => {
       setNews(session.news);
       setSummaryText(session.summary);
       setDuration(session.durationOption);
+      setPodcastAudioUrl(session.audioUrl || null);
       
       let topics: string[] = [];
       if (Array.isArray(session.focus)) {
@@ -140,7 +171,7 @@ function App() {
       setErrorMsg(null);
       setCompletedTasks(0);
       setTotalTasks(0);
-      setAppMode(AppMode.NEWS); // Force switch to news mode when loading history
+      setAppMode(AppMode.NEWS); 
   };
 
   const deleteSession = (id: string, e: React.MouseEvent) => {
@@ -155,6 +186,7 @@ function App() {
           } else {
               setNews([]);
               setSummaryText("");
+              setPodcastAudioUrl(null);
               setStatus(AppStatus.IDLE);
               setCurrentSessionId(undefined);
           }
@@ -166,15 +198,12 @@ function App() {
           setIsCustomInputVisible(!isCustomInputVisible);
           return;
       }
-
       if (topicId === '推荐' || topicId === '综合') {
           setSelectedTopics([topicId]);
           return;
       }
 
       let newTopics = [...selectedTopics];
-      
-      // Remove exclusive tabs
       newTopics = newTopics.filter(t => t !== '综合' && t !== '推荐');
 
       if (newTopics.includes(topicId)) {
@@ -190,22 +219,64 @@ function App() {
       setSelectedTopics(newTopics);
   };
 
+  // Reusable Podcast Generation Logic
+  const executePodcastGeneration = async (summary: string): Promise<string> => {
+      setStatus(AppStatus.GENERATING_PODCAST);
+      setLoadingText("正在策划双人播客脚本 (Kai & Maia)...");
+
+      // 1. Generate Script 
+      const script: PodcastSegment[] = await generatePodcastScript(summary, settings);
+      
+      setLoadingText("正在初始化语音引擎...");
+      
+      // 2. Generate Audio 
+      const { buffer, mimeType } = await generatePodcastAudio(script, settings, (percent) => {
+          setLoadingText(`正在录制 AI 语音 (${percent}%)...`);
+      });
+      
+      // 3. Create Blob URL
+      const blob = new Blob([buffer], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      return url;
+  };
+
+  // Manual Trigger
+  const handleGeneratePodcastManual = async () => {
+    if (!summaryText || podcastAudioUrl) return;
+    try {
+        const url = await executePodcastGeneration(summaryText);
+        setPodcastAudioUrl(url);
+        setStatus(AppStatus.READY);
+        if (currentSessionId) {
+            updateHistoryAudio(currentSessionId, url);
+        }
+    } catch (e: any) {
+        console.error("Manual Podcast Generation Error:", e);
+        let errorDetail = e.message || "未知错误";
+        if (errorDetail.includes("401") || errorDetail.includes("InvalidApiKey")) {
+            errorDetail = "生成播客失败：TTS API Key 无效或未配置。";
+        }
+        setErrorMsg(errorDetail);
+        setStatus(AppStatus.ERROR);
+    }
+  };
+
   const handleStartBriefing = async () => {
+    console.log("[App] Starting Briefing Flow...");
     try {
       setErrorMsg(null);
       setNews([]);
       setSummaryText("");
+      setPodcastAudioUrl(null);
       setCurrentSessionId(undefined); 
       setCompletedTasks(0);
       
       let requestedTopics = [...selectedTopics];
       
-      // If "For You" (Recommend) is selected, inject user interests
       if (requestedTopics.includes('推荐')) {
           const interests = settings.userInterests && settings.userInterests.length > 0 
                             ? settings.userInterests 
-                            : ['综合热点']; // Default fallback
-          // Replace '推荐' with actual interests for processing
+                            : ['综合热点']; 
           requestedTopics = requestedTopics.filter(t => t !== '推荐');
           requestedTopics.push(...interests);
       }
@@ -220,12 +291,9 @@ function App() {
           throw new Error("请先在设置中配置 API Key。");
       }
 
-      // --- Granular Segment Logic ---
       setStatus(AppStatus.FETCHING_NEWS);
       
-      // Breakdown topics into smaller chunks for parallel fetching and UI updates
       let searchSegments: string[] = [];
-      
       requestedTopics.forEach(mainTopic => {
           if (TOPIC_SUBDIVISIONS[mainTopic] && TOPIC_SUBDIVISIONS[mainTopic].length > 0) {
               searchSegments.push(...TOPIC_SUBDIVISIONS[mainTopic]);
@@ -234,23 +302,18 @@ function App() {
           }
       });
       
-      // Deduplicate
       searchSegments = [...new Set(searchSegments)];
       setTotalTasks(searchSegments.length);
 
-      // Execute fetches
       const fetchPromises = searchSegments.map(async (topic) => {
           try {
               setActiveSegment(topic);
               const items = await fetchNewsByTopic(settings, topic);
-              
-              // Incrementally update UI
               setCompletedTasks(prev => prev + 1);
               if (items.length > 0) {
                   setNews(prev => {
                       const existingHeadlines = new Set(prev.map(n => n.headline));
                       const newItems = items.filter(n => !existingHeadlines.has(n.headline));
-                      // Sort by date desc just in case
                       return [...prev, ...newItems].sort((a,b) => b.date.localeCompare(a.date));
                   });
               }
@@ -263,7 +326,6 @@ function App() {
       });
 
       setLoadingText("正在启动并行搜索矩阵...");
-      
       const results = await Promise.all(fetchPromises);
       const allNews = results.flat();
 
@@ -271,28 +333,34 @@ function App() {
           throw new Error("未能获取任何新闻。请检查 API Key、网络或更换模型。");
       }
 
-      // Scroll to bottom to show news appearing
-      if(bottomRef.current) {
-          bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
-
-      // Step 3: Generate Summary
       setStatus(AppStatus.ANALYZING);
       setActiveSegment("AI 深度聚合分析");
       setLoadingText("正在进行全量深度分析...");
       
-      // Use original selected topics for context in prompt, but if it was '推荐', use '个人定制推荐'
       const promptTopics = selectedTopics.includes('推荐') ? ['个人定制推荐', ...settings.userInterests] : requestedTopics;
       const text = await generateNewsBriefing(allNews, duration, settings, promptTopics);
       setSummaryText(text);
 
+      let generatedAudioUrl = undefined;
+      
+      // Auto Generate Podcast Flow
+      if (autoGeneratePodcast) {
+          try {
+              generatedAudioUrl = await executePodcastGeneration(text);
+              setPodcastAudioUrl(generatedAudioUrl);
+          } catch (podcastError: any) {
+              console.error("Auto podcast generation failed", podcastError);
+              // Non-blocking error for briefing
+              setErrorMsg(`简报已生成，但播客生成失败: ${podcastError.message}`);
+          }
+      }
+
       setStatus(AppStatus.READY);
       setLoadingText("完成");
-      
-      saveToHistory(allNews, text, duration, selectedTopics);
+      saveToHistory(allNews, text, duration, selectedTopics, generatedAudioUrl);
 
     } catch (err: any) {
-      console.error(err);
+      console.error("[App] Briefing Error:", err);
       const msg = err.message || JSON.stringify(err);
       let userMsg = "出错了，请稍后重试。";
       
@@ -300,10 +368,11 @@ function App() {
          userMsg = "鉴权失败：API Key 无效。请检查设置。";
       } else if (msg.includes("500")) {
           userMsg = "AI 服务暂时繁忙 (500)，请稍后重试。";
+      } else if (msg.includes("timeout") || msg.includes("超时")) {
+          userMsg = "请求超时，请检查网络或稍后重试。";
       } else {
          userMsg = `出错了: ${msg.substring(0, 100)}`;
       }
-      
       setErrorMsg(userMsg);
       setStatus(AppStatus.ERROR);
     }
@@ -315,25 +384,23 @@ function App() {
           return `搜索中 (${percent}%)`;
       }
       if (status === AppStatus.ANALYZING) return "正在撰写...";
-      return "生成深度简报";
+      if (status === AppStatus.GENERATING_PODCAST) return loadingText;
+      return autoGeneratePodcast ? "一键生成简报 & 播客" : "生成深度简报";
   };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100 pb-20">
-      
       <SettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSaveSettings}
         currentSettings={settings}
       />
-
       <ShareModal 
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         defaultText={shareContent}
       />
-
       <HistorySidebar
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
@@ -343,15 +410,12 @@ function App() {
         currentSessionId={currentSessionId}
       />
 
-      {/* Navbar */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm backdrop-blur-md bg-white/90 transition-all duration-300">
           <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
             <div className="flex items-center gap-4">
                 <div className="bg-slate-900 p-2 rounded-lg text-white shadow-lg shadow-slate-900/20">
                   <Newspaper className="w-5 h-5" />
                 </div>
-                
-                {/* Mode Switcher */}
                 <div className="hidden md:flex bg-slate-100 p-1 rounded-lg">
                     <button 
                         onClick={() => setAppMode(AppMode.NEWS)}
@@ -368,19 +432,15 @@ function App() {
                         生活探索
                     </button>
                 </div>
-                {/* Mobile Title */}
                 <h1 className="md:hidden text-lg font-bold tracking-tight text-slate-900">
                     早安 AI
                 </h1>
             </div>
 
             <div className="flex items-center gap-2">
-                 
-                 {/* Mobile Mode Toggle (Simple) */}
                  <button className="md:hidden p-2 text-slate-500" onClick={() => setAppMode(prev => prev === AppMode.NEWS ? AppMode.TRAVEL : AppMode.NEWS)}>
                      {appMode === AppMode.NEWS ? <Map className="w-5 h-5" /> : <Newspaper className="w-5 h-5" />}
                  </button>
-
                  <button
                     onClick={() => setIsHistoryOpen(true)}
                     className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-blue-600 transition-colors relative"
@@ -389,7 +449,6 @@ function App() {
                     <HistoryIcon className="w-5 h-5" />
                     {history.length > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-500 rounded-full ring-2 ring-white"></span>}
                  </button>
-
                  <button
                     onClick={() => setIsSettingsOpen(true)}
                     className={`p-2 hover:bg-slate-100 rounded-full transition-colors ${
@@ -403,7 +462,6 @@ function App() {
                  {appMode === AppMode.NEWS && (
                  <>
                     <div className="h-6 w-px bg-slate-200 mx-1"></div>
-
                     <button 
                         onClick={handleStartBriefing}
                         disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
@@ -412,11 +470,10 @@ function App() {
                     {status === AppStatus.FETCHING_NEWS && (
                             <div className="absolute left-0 bottom-0 h-1 bg-blue-400 transition-all duration-300" style={{ width: `${(completedTasks / totalTasks) * 100}%` }}></div>
                     )}
-                    
                     {status === AppStatus.IDLE || status === AppStatus.READY || status === AppStatus.ERROR ? (
                         <>
                             <Sparkles className="w-4 h-4 mr-2" />
-                            <span className="hidden sm:inline">生成深度简报</span>
+                            <span className="hidden sm:inline">{autoGeneratePodcast ? "生成简报+播客" : "生成深度简报"}</span>
                             <span className="sm:hidden">生成</span>
                         </>
                     ) : (
@@ -432,9 +489,7 @@ function App() {
           </div>
       </nav>
 
-      {/* Main Content Area */}
       <div className="max-w-4xl mx-auto p-4 md:p-6">
-        
         {appMode === AppMode.TRAVEL ? (
             <TravelView 
                 settings={settings} 
@@ -443,61 +498,74 @@ function App() {
             />
         ) : (
         <>
-            {/* News Controls Bar */}
-            <div className="mb-8 bg-white rounded-2xl border border-slate-200 p-1 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-4 overflow-hidden">
-                
-                <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
-                    {[
-                        { id: '推荐', icon: Heart, label: '推荐', color: 'text-pink-500' },
-                        { id: '综合', icon: Globe, label: '综合 (全网)' },
-                        { id: '国内', icon: Hash, label: '国内' },
-                        { id: '国际', icon: Globe, label: '国际' },
-                        { id: '科技', icon: Cpu, label: '科技' },
-                        { id: '财经', icon: TrendingUp, label: '财经' },
-                        { id: '自定义', icon: Edit3, label: '自定义' },
-                    ].map((item) => {
-                        const isSelected = item.id === '自定义' 
-                            ? isCustomInputVisible 
-                            : selectedTopics.includes(item.id);
-
-                        return (
-                            <button
-                                key={item.id}
-                                onClick={() => toggleTopic(item.id)}
-                                disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                                className={`flex items-center px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
-                                isSelected
-                                ? 'bg-slate-900 text-white shadow-md'
-                                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                                }`}
-                            >
-                                <item.icon className={`w-3.5 h-3.5 mr-2 ${!isSelected && item.color ? item.color : ''}`} />
-                                {item.label}
-                            </button>
-                        );
-                    })}
+            <div className="mb-4">
+                 <div className="bg-white rounded-2xl border border-slate-200 p-1 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-2 md:gap-4 overflow-hidden mb-4">
+                    <div className="flex-1 w-full md:w-auto overflow-x-auto scrollbar-hide flex items-center p-1 gap-1">
+                        {[
+                            { id: '推荐', icon: Heart, label: '推荐', color: 'text-pink-500' },
+                            { id: '综合', icon: Globe, label: '综合 (全网)' },
+                            { id: '国内', icon: Hash, label: '国内' },
+                            { id: '国际', icon: Globe, label: '国际' },
+                            { id: '科技', icon: Cpu, label: '科技' },
+                            { id: '财经', icon: TrendingUp, label: '财经' },
+                            { id: '自定义', icon: Edit3, label: '自定义' },
+                        ].map((item) => {
+                            const isSelected = item.id === '自定义' ? isCustomInputVisible : selectedTopics.includes(item.id);
+                            return (
+                                <button
+                                    key={item.id}
+                                    onClick={() => toggleTopic(item.id)}
+                                    disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
+                                    className={`flex items-center px-3 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                                    isSelected ? 'bg-slate-900 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                    }`}
+                                >
+                                    <item.icon className={`w-3.5 h-3.5 mr-2 ${!isSelected && item.color ? item.color : ''}`} />
+                                    {item.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div className="flex items-center gap-2 px-2 pb-1 md:pb-0">
+                         <div className="flex items-center bg-slate-100 rounded-xl p-1">
+                            {(['short', 'medium', 'long'] as DurationOption[]).map((opt) => (
+                                <button
+                                    key={opt}
+                                    onClick={() => setDuration(opt)}
+                                    disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                        duration === opt ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                                    }`}
+                                >
+                                    {opt === 'short' ? '精简' : opt === 'medium' ? '标准' : '深度'}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 </div>
 
-                <div className="flex items-center bg-slate-100 rounded-xl p-1 mx-2 mb-2 md:mb-0">
-                    {(['short', 'medium', 'long'] as DurationOption[]).map((opt) => (
-                        <button
-                            key={opt}
-                            onClick={() => setDuration(opt)}
-                            disabled={status !== AppStatus.IDLE && status !== AppStatus.READY && status !== AppStatus.ERROR}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                duration === opt 
-                                ? 'bg-white text-blue-600 shadow-sm' 
-                                : 'text-slate-500 hover:text-slate-700'
-                            }`}
-                        >
-                            {opt === 'short' ? '精简' : opt === 'medium' ? '标准' : '深度'}
-                        </button>
-                    ))}
+                {/* Auto Podcast Toggle */}
+                <div className="flex justify-end px-2">
+                     <label className="flex items-center gap-2 cursor-pointer group">
+                        <div className="relative">
+                            <input 
+                                type="checkbox" 
+                                className="sr-only peer"
+                                checked={autoGeneratePodcast}
+                                onChange={(e) => setAutoGeneratePodcast(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500 group-hover:text-slate-700 transition-colors">
+                            <Mic className={`w-3.5 h-3.5 ${autoGeneratePodcast ? 'text-blue-500' : 'text-slate-400'}`} />
+                            自动生成 AI 播客
+                        </div>
+                     </label>
                 </div>
             </div>
 
             {isCustomInputVisible && (
-                <div className="mb-6 -mt-4 animate-in fade-in slide-in-from-top-2">
+                <div className="mb-6 -mt-2 animate-in fade-in slide-in-from-top-2">
                     <div className="relative">
                         <Edit3 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
                         <input 
@@ -521,7 +589,6 @@ function App() {
                 </div>
             )}
 
-            {/* Live Status Indicator (Shown during fetching) */}
             {status === AppStatus.FETCHING_NEWS && (
                 <div className="mb-6 flex items-center justify-center animate-in fade-in slide-in-from-top-2">
                     <div className="bg-white border border-blue-100 shadow-lg shadow-blue-500/10 px-5 py-3 rounded-full flex items-center gap-3">
@@ -540,20 +607,18 @@ function App() {
                 </div>
             )}
 
-            {/* Layout: Vertical Stack */}
             <div className="flex flex-col gap-8">
-            
-            {/* 1. Briefing Section (Top) */}
             <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
                 <BriefingView 
                     status={status}
                     summary={summaryText}
                     onOpenShare={handleOpenShare}
+                    onGeneratePodcast={handleGeneratePodcastManual}
+                    podcastUrl={podcastAudioUrl}
                 />
             </section>
 
-            {/* 2. News Timeline Section (Bottom) */}
-            {(status === AppStatus.READY || status === AppStatus.FETCHING_NEWS || status === AppStatus.ANALYZING || news.length > 0) && (
+            {(status === AppStatus.READY || status === AppStatus.FETCHING_NEWS || status === AppStatus.ANALYZING || status === AppStatus.GENERATING_PODCAST || news.length > 0) && (
                 <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
                     <div className="mb-6 flex items-center justify-between border-b border-slate-200 pb-4">
                         <div>
@@ -574,17 +639,13 @@ function App() {
                             <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
                         )}
                     </div>
-                    
                     <NewsTimeline 
                         news={news} 
                         loading={status === AppStatus.FETCHING_NEWS && news.length === 0} 
                     />
-                    
-                    {/* Scroll Anchor */}
                     <div ref={bottomRef}></div>
                 </section>
             )}
-
             </div>
         </>
         )}

@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart, Brain, MessageSquare } from 'lucide-react';
-import { AppSettings, DEFAULT_SETTINGS } from '../types';
+import { X, Save, RotateCcw, Globe, Search, Key, Cpu, ShieldCheck, Zap, Server, Heart, Brain, MessageSquare, Volume2, Loader2, PlayCircle, AudioWaveform } from 'lucide-react';
+import { AppSettings, DEFAULT_SETTINGS, PodcastSegment } from '../types';
+import { generatePodcastAudio } from '../services/gemini';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -44,6 +45,16 @@ const TONGYI_MODELS = [
   { value: 'qwen-flash', label: 'Qwen Flash (通义千问-Flash)' },
 ];
 
+// TTS Model Options
+const GEMINI_TTS_MODELS = [
+    { value: 'gemini-2.5-flash-preview-tts', label: 'Gemini 2.5 Flash TTS (Preview)' },
+];
+
+const TONGYI_TTS_MODELS = [
+    { value: 'qwen3-tts-flash', label: 'Qwen3 TTS Flash (推荐/最新)' },
+    { value: 'sambert-zh-v1', label: 'Sambert V1 (经典/稳定)' },
+];
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -51,6 +62,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   currentSettings,
 }) => {
   const [formData, setFormData] = useState<AppSettings>(currentSettings);
+  const [isTestingAudio, setIsTestingAudio] = useState(false);
   
   const hasBuiltInGemini = !!process.env.API_KEY;
   const hasBuiltInDeepSeek = !!process.env.DEEPSEEK_API_KEY;
@@ -114,6 +126,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return "sk-...";
   };
 
+  // Determine which TTS options to show based on provider
+  // If user selects DeepSeek/OpenAI, we usually fallback to Gemini or Tongyi for TTS if available.
+  // Here we simplify: if provider is Tongyi, show Tongyi TTS. If Gemini, show Gemini TTS.
+  // If others, we show both sets if keys are likely available, or default to a generic list.
+  const getTTSOptions = () => {
+      if (formData.provider === 'gemini') return GEMINI_TTS_MODELS;
+      if (formData.provider === 'tongyi') return TONGYI_TTS_MODELS;
+      
+      // Fallback for others: Show Tongyi if configured, else Gemini
+      return [...TONGYI_TTS_MODELS, ...GEMINI_TTS_MODELS];
+  };
+
+  const handleTestAudio = async () => {
+    if (!formData.apiKey && !shouldUseBuiltIn) {
+        alert("请先填写 API Key 或使用内置 Key 配置");
+        return;
+    }
+
+    setIsTestingAudio(true);
+    try {
+        const testScript: PodcastSegment[] = [
+            { speaker: "Kai", text: "你好，这是一个语音合成功能的测试。" },
+            { speaker: "Maia", text: "System check complete. Audio generation is working properly." }
+        ];
+
+        // Pass formData (current unsaved settings) to test what user just typed
+        const { buffer, mimeType } = await generatePodcastAudio(testScript, formData);
+        
+        const blob = new Blob([buffer], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        
+        await audio.play();
+    } catch (e: any) {
+        alert(`测试失败: ${e.message}`);
+        console.error(e);
+    } finally {
+        setIsTestingAudio(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] flex flex-col border border-slate-100">
@@ -159,7 +212,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="space-y-4">
               <label className="text-sm font-bold text-slate-800 flex items-center">
                   <Cpu className="w-4 h-4 mr-2 text-blue-600" />
-                  AI 服务提供商
+                  AI 服务提供商 (LLM)
               </label>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <button
@@ -167,6 +220,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => {
                           handleChange('provider', 'gemini');
                           handleChange('model', 'gemini-2.0-flash');
+                          handleChange('ttsModel', 'gemini-2.5-flash-preview-tts');
                       }}
                       className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'gemini' 
@@ -185,6 +239,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           handleChange('provider', 'deepseek');
                           handleChange('baseUrl', 'https://api.deepseek.com');
                           handleChange('model', 'deepseek-chat');
+                          handleChange('ttsModel', 'qwen3-tts-flash'); // Default fallback
                       }}
                       className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'deepseek' 
@@ -202,7 +257,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => {
                           handleChange('provider', 'tongyi');
                           handleChange('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
-                          handleChange('model', 'qwen-flash');
+                          handleChange('model', 'qwen-plus');
+                          handleChange('ttsModel', 'qwen3-tts-flash');
                       }}
                       className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-2 transition-all ${
                           formData.provider === 'tongyi' 
@@ -296,6 +352,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                              需开通阿里云 DashScope 服务。建议使用 qwen-max 以获得最佳效果。
                           </p>
                       </div>
+
+                      {/* TTS Model Selection specifically for Tongyi */}
+                      <div className="space-y-2 pt-2 border-t border-slate-200/50">
+                          <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                              <Volume2 className="w-4 h-4 text-orange-500" />
+                              语音模型 (TTS)
+                          </label>
+                          <select
+                            value={formData.ttsModel || 'qwen3-tts-flash'}
+                            onChange={(e) => handleChange('ttsModel', e.target.value)}
+                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                          >
+                             {TONGYI_TTS_MODELS.map(m => (
+                                <option key={m.value} value={m.value}>{m.label}</option>
+                             ))}
+                          </select>
+                      </div>
                  </div>
              )}
 
@@ -349,6 +422,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                  </div>
              </div>
+
+             {/* Audio/TTS Settings */}
+             <div className="space-y-2 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between">
+                   <label className="text-sm font-bold text-slate-700 flex items-center">
+                       <AudioWaveform className="w-4 h-4 mr-2 text-indigo-500" />
+                       语音合成 (TTS) 设置
+                   </label>
+                </div>
+                
+                {formData.provider !== 'tongyi' && (
+                <div className="space-y-2">
+                   <label className="text-xs font-semibold text-slate-500">语音生成模型</label>
+                   <div className="flex gap-2">
+                        <select
+                            value={formData.ttsModel || 'qwen3-tts-flash'}
+                            onChange={(e) => handleChange('ttsModel', e.target.value)}
+                            className="flex-1 px-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                        >
+                            {getTTSOptions().map(opt => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                        </select>
+                   </div>
+                   <p className="text-[10px] text-slate-400">
+                      不同的 AI 提供商支持不同的语音模型。若使用 DeepSeek/OpenAI，系统将尝试调用通义或 Gemini 的语音服务 (需配置 Key)。
+                   </p>
+                </div>
+                )}
+
+                 {/* Audio Test Button */}
+                 <div className="pt-2 flex justify-end">
+                    <button
+                        type="button"
+                        onClick={handleTestAudio}
+                        disabled={isTestingAudio}
+                        className="flex items-center gap-1.5 text-xs font-bold text-blue-600 bg-white hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors border border-blue-200 shadow-sm"
+                    >
+                        {isTestingAudio ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                            <Volume2 className="w-3.5 h-3.5" />
+                        )}
+                        {isTestingAudio ? "正在合成..." : "测试 TTS 语音"}
+                    </button>
+                 </div>
+             </div>
+
           </div>
 
           <div className="h-px bg-slate-100"></div>

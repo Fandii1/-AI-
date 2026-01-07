@@ -1,6 +1,6 @@
 
-import { GoogleGenAI } from "@google/genai";
-import { NewsItem, DurationOption, AppSettings, TravelRequest } from "../types";
+import { GoogleGenAI, Modality } from "@google/genai";
+import { NewsItem, DurationOption, AppSettings, TravelRequest, PodcastSegment } from "../types";
 
 // --- Generic Helpers ---
 
@@ -27,6 +27,17 @@ const getEffectiveKey = (settings: AppSettings): string => {
     return '';
 };
 
+// Helper: Get Tongyi Key specifically for TTS (can fallback to env)
+const getTongyiKey = (settings: AppSettings): string => {
+    // 1. If provider is Tongyi, prioritize user input key (settings.apiKey), then fallback to env
+    if (settings.provider === 'tongyi') {
+        return settings.apiKey || process.env.TONGYI_API_KEY || '';
+    }
+    // 2. If provider is NOT Tongyi (e.g. Gemini/DeepSeek), ignore settings.apiKey (it's for LLM) 
+    // and strictly use the dedicated environment variable for Tongyi TTS.
+    return process.env.TONGYI_API_KEY || '';
+};
+
 // Robust URL constructor for OpenAI compatible endpoints
 const constructChatUrl = (baseUrl: string): string => {
   let url = baseUrl.trim().replace(/\/$/, '');
@@ -39,12 +50,10 @@ const constructChatUrl = (baseUrl: string): string => {
       return `${url}/chat/completions`;
   }
   
-  // Handle bare domain like 'https://api.deepseek.com' or 'https://dashscope.aliyuncs.com/compatible-mode/v1'
   return `${url}/chat/completions`;
 };
 
 // Helper: Normalize date to YYYY-MM-DD
-// If invalid, defaults to fallbackDate
 function normalizeDate(rawDate: any, fallbackDate: string): string {
     if (!rawDate) return fallbackDate;
     
@@ -61,6 +70,25 @@ function normalizeDate(rawDate: any, fallbackDate: string): string {
     }
 }
 
+// Fetch with timeout to prevent hanging requests
+const fetchWithTimeout = async (resource: string, options: RequestInit & { timeout?: number } = {}) => {
+  const { timeout = 60000, ...rest } = options; // 60s default timeout
+  
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+      const response = await fetch(resource, {
+        ...rest,
+        signal: controller.signal  
+      });
+      clearTimeout(id);
+      return response;
+  } catch (error) {
+      clearTimeout(id);
+      throw error;
+  }
+};
+
 async function callOpenAICompatible(
   baseUrl: string,
   apiKey: string,
@@ -70,9 +98,10 @@ async function callOpenAICompatible(
 ): Promise<string> {
   
   const url = constructChatUrl(baseUrl);
+  console.log(`[LLM] Calling OpenAI Compatible API: ${url} | Model: ${model}`);
   
   try {
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -83,20 +112,28 @@ async function callOpenAICompatible(
           messages: messages,
           temperature: temperature,
           stream: false
-        })
+        }),
+        timeout: 90000 // 90s timeout for LLM generation
       });
 
       if (!response.ok) {
         const errText = await response.text();
+        console.error(`[LLM] API Request Failed: ${response.status}`, errText);
         throw new Error(`API Request Failed: [${response.status}] ${errText.substring(0, 200)}`);
       }
 
       const data = await response.json();
-      return data.choices?.[0]?.message?.content || "";
+      const content = data.choices?.[0]?.message?.content || "";
+      console.log(`[LLM] Response received. Length: ${content.length}`);
+      return content;
 
   } catch (error: any) {
+      console.error(`[LLM] Network/Parsing Error:`, error);
       if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
           throw new Error("网络请求失败 (CORS)。您的浏览器可能无法直接访问该 API 地址。请尝试使用支持 CORS 的代理地址，或检查网络连接。");
+      }
+      if (error.name === 'AbortError') {
+          throw new Error("请求超时，AI 响应时间过长，请稍后重试。");
       }
       throw error;
   }
@@ -105,19 +142,19 @@ async function callOpenAICompatible(
 // 1. Fetch News by Topic (Single Segment)
 export async function fetchNewsByTopic(settings: AppSettings, topic: string): Promise<NewsItem[]> {
   const now = new Date();
-  // Ensure YYYY-MM-DD format based on local time
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   const dateStr = `${year}-${month}-${day}`;
   
+  console.log(`[News] Fetching topic: ${topic}`);
+
   const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) {
       const providerName = settings.provider === 'deepseek' ? 'DeepSeek' : (settings.provider === 'tongyi' ? '通义千问' : 'AI');
       throw new Error(`请配置 ${providerName} API Key`);
   }
 
-  // Optimized prompt for strict timeliness and sub-topic focus
   const prompt = `
     Role: Real-time News Engine.
     Current Date: ${dateStr} (China Standard Time)
@@ -126,16 +163,12 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
     Task: Search for the VERY LATEST headlines specifically about "${topic}".
     
     CRITICAL INSTRUCTIONS:
-    1. **LANGUAGE**: Output MUST be in **SIMPLIFIED CHINESE (简体中文)**. Even if sources are English, translate to Chinese.
-    2. **TIMELINESS**: 
-       - PRIMARY GOAL: Find news from **TODAY (${dateStr})**.
-       - SECONDARY GOAL: News from yesterday.
-       - FORBIDDEN: News older than 48 hours.
+    1. **LANGUAGE**: Output MUST be in **SIMPLIFIED CHINESE (简体中文)**.
+    2. **TIMELINESS**: Focus on news from **TODAY (${dateStr})** or yesterday.
     
     Requirements:
-    1. Quantity: Find 8-12 distinct, high-impact items for this micro-topic.
-    2. Content: Focus on facts, numbers, and direct quotes.
-    3. Format: Strict JSON array.
+    1. Quantity: Find 8-12 distinct, high-impact items.
+    2. Format: Strict JSON array.
     
     JSON Structure:
     [
@@ -159,6 +192,7 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
               ]
           );
       } else {
+          console.log(`[News] Using Gemini GoogleSearch Tool...`);
           const ai = getGeminiClient(effectiveKey);
           const response = await ai.models.generateContent({
             model: settings.model || 'gemini-2.0-flash',
@@ -170,18 +204,17 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
           text = response.text || "[]";
           groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       }
+    
+    console.log(`[News] Raw response for ${topic} (Length: ${text.length})`);
 
     let newsItems: NewsItem[] = [];
     try {
-        let jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        // Remove DeepSeek <think> tags if present
+        let jsonStr = text.replace(/```json/g, '').replace(/```/g, '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, '');
         
         const startIndex = jsonStr.indexOf('[');
         let endIndex = jsonStr.lastIndexOf(']');
         
-        // Auto-Repair Truncated JSON
         if (startIndex !== -1 && endIndex === -1) {
              const lastBrace = jsonStr.lastIndexOf('}');
              if (lastBrace > startIndex) {
@@ -203,64 +236,55 @@ export async function fetchNewsByTopic(settings: AppSettings, topic: string): Pr
                     headline: item.headline || "无标题",
                     summary: item.summary || "暂无摘要",
                     category: item.category || topic,
-                    // Safe normalization to prevent "Invalid Date"
                     date: normalizeDate(item.date, dateStr),
                     sources: validSources 
                 }));
             }
+        } else {
+            console.warn(`[News] No JSON array found in response for ${topic}. Response start: ${jsonStr.substring(0, 100)}...`);
         }
     } catch (e) {
-        console.error(`Failed to parse news JSON for topic ${topic}`, e);
+        console.error(`[News] Failed to parse JSON for topic ${topic}`, e);
+        console.debug(`[News] Failed Response Text:`, text);
         newsItems = [];
     }
-
     return newsItems;
 
   } catch (error) {
-    console.error(`News Fetch Error (${topic}):`, error);
+    console.error(`[News] Fetch Error (${topic}):`, error);
     return [];
   }
 }
 
 // 2. Generate Briefing Summary
 export async function generateNewsBriefing(news: NewsItem[], duration: DurationOption, settings: AppSettings, topics: string[]): Promise<string> {
-  
+  console.log(`[Summary] Generating briefing from ${news.length} items...`);
   const MAX_ITEMS = 150; 
   const processedNews = news.slice(0, MAX_ITEMS);
   const now = new Date();
   const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
-  
   const newsContext = processedNews.map((n, i) => `${i+1}. [${n.date}] [${n.category}] ${n.headline}: ${n.summary}`).join("\n");
   
   let lengthInstruction = "";
   switch(duration) {
-      case 'short': lengthInstruction = "字数 1000 字左右，快节奏。"; break;
-      case 'medium': lengthInstruction = "字数 2000 字左右，兼顾深度。"; break;
-      case 'long': lengthInstruction = "字数 3500 字以上，极度详尽，如同智库报告。"; break;
+      case 'short': lengthInstruction = "字数 1000 字左右。"; break;
+      case 'medium': lengthInstruction = "字数 2000 字左右。"; break;
+      case 'long': lengthInstruction = "字数 3500 字以上。"; break;
   }
 
   const effectiveKey = getEffectiveKey(settings);
   if (!effectiveKey) throw new Error("Missing API Key");
 
-  const systemPrompt = `你是一位世界顶级的中文新闻主编。今天是 ${dateStr}。任务是将碎片化新闻重组为一份逻辑严密、深度极高的《今日情报简报》。请全程使用简体中文。`;
-  
+  const systemPrompt = `你是一位世界顶级的中文新闻主编。今天是 ${dateStr}。任务是将碎片化新闻重组为一份逻辑严密、深度极高的《今日情报简报》。`;
   const userPrompt = `
-    请根据以下 ${processedNews.length} 条新闻素材，撰写今日深度简报。
-
-    【核心指令】：
-    1. **语言**：必须使用**简体中文**。
-    2. **时效性优先**：重点突出“今天”发生的重大进展。
-    3. **深度整合**：将相关联的新闻（例如同一事件的不同侧面）合并分析，不要做流水账。
-    4. **板块划分**：请清晰划分为：
-       - 🚨 今日头条 (Breaking News)
-       - 🇨🇳 国内动态 (China Focus)
-       - 🌏 国际局势 (Global Affairs)
-       - 💹 财经与科技 (Business & Tech)
-       - 🔮 趋势研判 (Analyst's Take)
-    5. **分析师点评**：在每个板块末尾，必须加上“分析师点评”，揭示新闻背后的逻辑或未来几天的走势。
-    6. **长度**：${lengthInstruction}
-
-    【新闻素材】：
+    请根据以下新闻素材，撰写今日深度简报。
+    【要求】：
+    1. 语言：简体中文。
+    2. 深度整合：不要流水账，将相关新闻合并分析。
+    3. 板块：🚨今日头条, 🇨🇳国内动态, 🌏国际局势, 💹财经科技, 🔮趋势研判。
+    4. 长度：${lengthInstruction}
+    
+    【素材】：
     ${newsContext}
   `;
 
@@ -274,113 +298,44 @@ export async function generateNewsBriefing(news: NewsItem[], duration: DurationO
              { role: 'user', content: userPrompt }
           ]
       );
-      // Clean <think> tags for DeepSeek R1
       return text.replace(/<think>[\s\S]*?<\/think>/g, '');
   } else {
       const ai = getGeminiClient(effectiveKey);
       const response = await ai.models.generateContent({
         model: settings.model || 'gemini-2.0-flash',
         contents: userPrompt,
-        config: {
-           systemInstruction: systemPrompt
-        }
+        config: { systemInstruction: systemPrompt }
       });
       return response.text || "生成摘要失败。";
   }
 }
 
-// 3. Generate Lifestyle (Travel/Food) Guide
-export async function generateLifestyleGuide(req: TravelRequest, settings: AppSettings): Promise<string> {
-  const effectiveKey = getEffectiveKey(settings);
-  if (!effectiveKey) throw new Error("Missing API Key");
-
-  const isPlan = req.type === 'PLAN';
-  const budgetMap = { budget: '经济穷游', standard: '舒适标准', luxury: '豪华享受' };
-  const budgetStr = budgetMap[req.budget];
-  const interestsStr = req.interests.length > 0 ? req.interests.join("、") : "大众经典";
-
-  const imageInstruction = `
-    【配图指令】：
-    为了增加吸引力，请在每个主要推荐点（如推荐的景点、餐厅或特色菜）之后，**单独起一行**，插入一张 Markdown 图片。
-    
-    使用以下格式插入真实的搜索图片（不要使用 AI 生成的）：
-    \`![{名称}](https://tse1.mm.bing.net/th?q={关键词}&w=800&h=450&c=7&rs=1&p=0)\`
-
-    重要：
-    1. **{关键词}**：请替换为该地点或美食的**具体中文名称+城市名**（例如"成都大熊猫基地"、"重庆老火锅"）。
-    2. **{名称}**：图片的描述。
-    3. 务必将图片链接单独放在一行。
-    4. 每个主要段落（如每天的行程、每个推荐餐厅）至少配一张图。
-  `;
-
-  let systemPrompt = "";
-  let userPrompt = "";
-
-  if (isPlan) {
-    systemPrompt = `你是一位深谙"小红书"和"大众点评"风格的资深旅行规划师。你的任务是为用户生成一份极具实操性、图文并茂的旅行攻略。语言风格要年轻、热情、干货满满。`;
-    userPrompt = `
-      请为我规划一次去【${req.destination}】的旅行。
+// 4. Generate Podcast Script
+export async function generatePodcastScript(summary: string, settings: AppSettings): Promise<PodcastSegment[]> {
+    console.log(`[Podcast] Generating script...`);
+    const effectiveKey = getEffectiveKey(settings);
+    if (!effectiveKey) throw new Error("Missing API Key");
+  
+    const systemPrompt = `你是一位专业的双人播客内容策划。`;
+    const userPrompt = `
+      请将新闻简报改写为一段生动、幽默的“双人对话”播客脚本。
       
-      【基本信息】：
-      - 时长：${req.duration} 天
-      - 预算偏好：${budgetStr}
-      - 兴趣偏好：${interestsStr}
+      【角色】：
+      1. **Kai** (Male): 充满激情，声音磁性。
+      2. **Maia** (Female): 聪明知性，声音温柔。
       
-      【要求输出的内容】：
-      1. **🚩 路线概览**：一句话总结这次旅行的亮点。
-      2. **🗺️ 每日详细行程**：按第1天、第2天...的格式。每天必须包含：
-         - 景点顺序（考虑地理位置合理性）
-         - 建议游玩时长
-         - 交通连接建议
-         - (按指令插入真实景点图片)
-      3. **🏨 住宿避雷与推荐**：
-         - 推荐住在哪个区域最方便
-         - 针对${budgetStr}预算，推荐2-3家具体酒店或民宿类型（引用真实网络评价中的优缺点）。
-         - (插入酒店区域或氛围图片)
-      4. **🍜 沿途美食**：
-         - 结合行程，推荐每天顺路的必吃餐厅或小吃。
-         - 必须包含：餐厅名称、推荐菜、人均参考。
-         - (插入真实美食图片)
-      5. **💡 避坑与贴士**：
-         - 当地交通、穿衣、防骗、预约门票等实用信息。
-      
-      ${imageInstruction}
-      
-      请利用搜索工具获取最新的景点开放情况、门票价格和真实的用户评价。
+      【要求】：
+      1. 选取 3-4 个最重要热点。像朋友聊天一样自然。
+      2. **格式严格**：输出 JSON 数组。
+         [ { "speaker": "Kai", "text": "..." }, { "speaker": "Maia", "text": "..." } ]
+  
+      【原文】：
+      ${summary.substring(0, 5000)}
     `;
-  } else {
-    // Food Guide
-    systemPrompt = `你是一位拥有百万粉丝的美食探店博主，专注于发现地道美食。你的风格是客观毒舌但又充满热情，擅长挖掘本地人去的小店。请参考大众点评的评价体系。`;
-    userPrompt = `
-      请帮我整理一份【${req.destination}】的必吃美食指南。
-      
-      【筛选条件】：
-      - 预算水平：${budgetStr}
-      - 口味偏好：${interestsStr}
-      
-      【请输出以下板块】：
-      1. **🔥 本地特色科普**：${req.destination}有什么是必吃的？（介绍3-4种特色菜/小吃）。
-         - (请为每种特色菜插入一张真实图片)
-      2. **🏆 必吃榜单推荐**（请基于真实口碑推荐 5-8 家店）：
-         - **分类推荐**：例如【老字号】、【网红打卡】、【本地人食堂】、【性价比之王】。
-         - 每家店需包含：
-           - 🏠 店名
-           - 💰 人均消费
-           - 🥘 必点菜
-           - ⭐ 推荐理由（结合环境、口味、排队情况）
-           - 📍 大致位置
-           - (必须插入该店招牌菜或环境的图片)
-      3. **⚠️ 排雷指南**：有哪些名气大但不好吃的店，或者需要注意的消费陷阱。
-      
-      ${imageInstruction}
-      
-      请利用搜索工具查找最新的食客评价和餐厅营业状态。
-    `;
-  }
-
-  try {
+  
+    let text = "";
     if (['openai', 'deepseek', 'tongyi'].includes(settings.provider)) {
-        let text = await callOpenAICompatible(
+        text = await callOpenAICompatible(
             settings.baseUrl,
             effectiveKey,
             settings.model,
@@ -389,21 +344,350 @@ export async function generateLifestyleGuide(req: TravelRequest, settings: AppSe
                { role: 'user', content: userPrompt }
             ]
         );
-        return text.replace(/<think>[\s\S]*?<\/think>/g, '');
     } else {
         const ai = getGeminiClient(effectiveKey);
         const response = await ai.models.generateContent({
           model: settings.model || 'gemini-2.0-flash',
           contents: userPrompt,
-          config: {
-             systemInstruction: systemPrompt,
-             tools: [{ googleSearch: {} }] // Critical for live travel info
+          config: { 
+            systemInstruction: systemPrompt,
+            responseMimeType: "application/json"
           }
         });
-        return response.text || "生成指南失败。";
+        text = response.text || "[]";
+    }
+
+    console.log(`[Podcast] Raw Script Response:`, text.substring(0, 200) + "...");
+
+    try {
+        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed)) {
+            console.log(`[Podcast] Script parsed successfully. ${parsed.length} segments.`);
+            return parsed;
+        } else {
+            console.error(`[Podcast] Parsed result is not an array.`);
+            return [{ speaker: "Kai", text: "生成脚本格式有误。" }];
+        }
+    } catch (e) {
+        console.error(`[Podcast] Script parsing error:`, e);
+        return [{ speaker: "Kai", text: "抱歉，无法生成对话。" }];
+    }
+}
+
+// --- AUDIO GENERATION STRATEGIES ---
+
+// HELPER: Add WAV Header to Raw PCM
+function createWavHeader(dataLength: number, sampleRate: number, numChannels: number, bitsPerSample: number): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  function writeString(view: DataView, offset: number, string: string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  writeString(view, 0, 'RIFF'); // ChunkID
+  view.setUint32(4, 36 + dataLength, true); // ChunkSize
+  writeString(view, 8, 'WAVE'); // Format
+  writeString(view, 12, 'fmt '); // Subchunk1ID
+  view.setUint32(16, 16, true); // Subchunk1Size
+  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
+  view.setUint16(22, numChannels, true); // NumChannels
+  view.setUint32(24, sampleRate, true); // SampleRate
+  view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true); // ByteRate
+  view.setUint16(32, numChannels * (bitsPerSample / 8), true); // BlockAlign
+  view.setUint16(34, bitsPerSample, true); // BitsPerSample
+  writeString(view, 36, 'data'); // Subchunk2ID
+  view.setUint32(40, dataLength, true); // Subchunk2Size
+
+  return new Uint8Array(header);
+}
+
+// Strategy A: Gemini Native TTS (Backup)
+async function generateGeminiAudio(script: PodcastSegment[], apiKey: string, modelName: string): Promise<{ buffer: ArrayBuffer, mimeType: string }> {
+    console.log(`[TTS] Using Gemini Native TTS. Model: ${modelName}`);
+    const ai = getGeminiClient(apiKey);
+    const transcript = script.map(s => `${s.speaker}: ${s.text}`).join('\n');
+    const prompt = `Generate a podcast audio for the following dialogue between Kai and Maia. Speak naturally and enthusiastically.\n\n${transcript}`;
+
+    // Fix: Structure the request to match strict API requirements for Gemini TTS
+    const response = await ai.models.generateContent({
+        model: modelName || 'gemini-2.5-flash-preview-tts',
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+                multiSpeakerVoiceConfig: {
+                    speakerVoiceConfigs: [
+                        { speaker: 'Kai', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } } },
+                        { speaker: 'Maia', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } } }
+                    ]
+                }
+            }
+        }
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) {
+        throw new Error("Gemini returned no audio data. Please check if the model is currently available.");
+    }
+
+    const binaryString = atob(base64Audio);
+    const len = binaryString.length;
+    const pcmBytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        pcmBytes[i] = binaryString.charCodeAt(i);
+    }
+
+    const header = createWavHeader(pcmBytes.length, 24000, 1, 16);
+    const wavBuffer = new Uint8Array(header.length + pcmBytes.length);
+    wavBuffer.set(header);
+    wavBuffer.set(pcmBytes, header.length);
+
+    console.log(`[TTS] Gemini Audio generated successfully. Size: ${wavBuffer.byteLength}`);
+    return { buffer: wavBuffer.buffer, mimeType: 'audio/wav' };
+}
+
+// Strategy B: Tongyi/DashScope Sambert TTS (Primary)
+async function generateTongyiAudio(script: PodcastSegment[], apiKey: string, modelName: string, onProgress?: (percent: number) => void): Promise<{ buffer: ArrayBuffer, mimeType: string }> {
+    console.log(`[TTS] Starting Tongyi/DashScope TTS. Model: ${modelName}`);
+    
+    // Determine Environment:
+    const isLocalhost = typeof window !== 'undefined' && 
+                        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    
+    const TARGET_API = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation";
+    
+    // 1. Try local proxy first if on localhost
+    let url = isLocalhost ? "/api/dashscope/api/v1/services/audio/tts/generation" : TARGET_API;
+    
+    const MODEL_NAME = modelName || "qwen3-tts-flash"; 
+
+    // Determine voice type based on model name
+    const isQwen = MODEL_NAME.includes('qwen');
+    const isCosy = MODEL_NAME.includes('cosyvoice');
+
+    // Default Voices
+    let maleVoice = "zhitian_emo";
+    let femaleVoice = "zhiyan_emo";
+
+    if (isQwen) {
+        // Qwen models support specific voices like 'cherry', 'dylan', 'sunny', 'jada'
+        maleVoice = "dylan";  
+        femaleVoice = "cherry"; 
+    } else if (isCosy) {
+        maleVoice = "longxiaocheng";
+        femaleVoice = "longxiaochun";
+    }
+
+    console.log(`[TTS] Using voices - Male: ${maleVoice}, Female: ${femaleVoice}`);
+
+    const results: ArrayBuffer[] = [];
+    const validSegments = script.filter(s => s.text && s.text.trim().length > 0);
+    const total = validSegments.length;
+
+    // Use SERIAL execution to prevent rate limiting
+    for (let i = 0; i < total; i++) {
+        const segment = validSegments[i];
+        const isMale = /Kai|凯|Male|Boy/i.test(segment.speaker);
+        const voice = isMale ? maleVoice : femaleVoice;
+        
+        console.log(`[TTS] Generating segment ${i+1}/${total}: [${segment.speaker}] ${segment.text.substring(0, 10)}...`);
+
+        if (onProgress) {
+             const percent = Math.round(((i) / total) * 100);
+             onProgress(percent);
+        }
+
+        try {
+            const payload = {
+                model: MODEL_NAME,
+                input: { 
+                    text: segment.text
+                },
+                parameters: {
+                    text_type: "PlainText",
+                    format: "mp3",
+                    voice: voice,
+                    sample_rate: 24000,
+                    // Add language_type explicitly as per best practice for qwen3-tts-flash
+                    language_type: "Auto" 
+                }
+            };
+
+            // Helper to try fetch
+            const doFetch = async (fetchUrl: string) => {
+                return await fetchWithTimeout(fetchUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload),
+                    timeout: 15000 // 15s timeout
+                });
+            };
+
+            console.log(`[TTS] Sending fetch request to ${url}...`);
+
+            let response;
+            try {
+                response = await doFetch(url);
+            } catch (netError) {
+                console.warn(`[TTS] Primary fetch to ${url} failed. Trying CORS proxy fallback...`, netError);
+                // Fallback to CORS proxy
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(TARGET_API)}`;
+                try {
+                    response = await doFetch(proxyUrl);
+                } catch (proxyError) {
+                    // If proxy also fails, throw original error
+                    throw netError;
+                }
+            }
+
+            if (!response.ok) {
+                 const errText = await response.text();
+                 console.error(`[TTS] Segment ${i} failed. Status: ${response.status}. Response: ${errText}`);
+                 
+                 let errMsg = errText;
+                 try {
+                     const errJson = JSON.parse(errText);
+                     if (errJson.message) errMsg = errJson.message;
+                     if (errJson.code) errMsg = `[${errJson.code}] ${errMsg}`;
+                 } catch (e) {}
+                 
+                 if (i === 0) {
+                     if (response.status === 404) {
+                         throw new Error(`语音API路径未找到 (404)。可能是本地代理未生效。`);
+                     }
+                     if (response.status === 401 || response.status === 403) {
+                         throw new Error(`语音API鉴权失败。请检查通义千问 API Key。`);
+                     }
+                     throw new Error(`语音API请求失败: ${errMsg.substring(0, 150)}`);
+                 }
+                 continue; 
+            }
+
+            const data = await response.json();
+            
+            // Success response: { output: { audio_url: "..." }, request_id: "..." }
+            if (data.output && data.output.audio_url) {
+                const audioUrl = data.output.audio_url;
+                
+                // Fetch the actual audio file
+                // Try direct first, then proxy if CORS issue
+                const doAudioFetch = async (aUrl: string) => {
+                    return await fetchWithTimeout(aUrl, { timeout: 15000 });
+                }
+
+                let audioResp;
+                try {
+                    audioResp = await doAudioFetch(audioUrl);
+                } catch (e) {
+                     // Try via proxy if audio fetch fails (often CORS on audio CDN)
+                     const proxyAudioUrl = `https://corsproxy.io/?${encodeURIComponent(audioUrl)}`;
+                     audioResp = await doAudioFetch(proxyAudioUrl);
+                }
+
+                if (!audioResp.ok) throw new Error(`Failed to download audio content: ${audioResp.status}`);
+                
+                const buffer = await audioResp.arrayBuffer();
+                results.push(buffer);
+            } else if (data.code) {
+                 console.error("[TTS] API Logical Error:", data.code, data.message);
+                 if (i === 0) throw new Error(`语音API错误: [${data.code}] ${data.message}`);
+            }
+
+        } catch (e: any) {
+            console.error(`[TTS] Exception in segment ${i}`, e);
+            if (i === 0) {
+                 // Enhance error message for user
+                 let msg = e.message;
+                 if (msg === 'Failed to fetch') {
+                     msg = '网络连接失败 (Failed to fetch)。可能是跨域(CORS)限制或代理服务未启动。';
+                 }
+                 throw new Error(`语音合成连接失败: ${msg}。建议切换到 Gemini TTS。`);
+            }
+        }
+    }
+    
+    if (onProgress) onProgress(100);
+
+    if (results.length === 0) {
+        throw new Error("语音生成失败：API 未返回任何音频数据。请检查 API Key 和网络。");
+    }
+
+    // Combine MP3 frames (Direct concatenation works for MP3 usually)
+    const totalLen = results.reduce((acc, b) => acc + b.byteLength, 0);
+    const combined = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const b of results) {
+        combined.set(new Uint8Array(b), offset);
+        offset += b.byteLength;
+    }
+    
+    console.log(`[TTS] Generation complete. Total bytes: ${totalLen}`);
+    return { buffer: combined.buffer, mimeType: 'audio/mp3' };
+}
+
+// 5. Main Audio Generation Facade
+export async function generatePodcastAudio(script: PodcastSegment[], settings: AppSettings, onProgress?: (percent: number) => void): Promise<{ buffer: ArrayBuffer, mimeType: string }> {
+    const tongyiKey = getTongyiKey(settings);
+    const geminiKey = settings.provider === 'gemini' ? (settings.apiKey || process.env.API_KEY) : process.env.API_KEY;
+
+    // Priority 1: Use Tongyi (Sambert/Qwen TTS) if Key is available.
+    if (tongyiKey) {
+        const model = settings.ttsModel && !settings.ttsModel.includes('gemini') ? settings.ttsModel : 'qwen3-tts-flash';
+        return await generateTongyiAudio(script, tongyiKey, model, onProgress);
+    }
+
+    // Priority 2: Use Gemini Native TTS as fallback.
+    if (geminiKey) {
+        const model = settings.ttsModel && settings.ttsModel.includes('gemini') ? settings.ttsModel : 'gemini-2.5-flash-preview-tts';
+        return await generateGeminiAudio(script, geminiKey, model);
+    }
+    
+    throw new Error("未检测到语音服务 API Key。请配置通义千问 (DashScope) 或 Gemini API Key。");
+}
+
+// 3. Generate Lifestyle Guide (No changes logic-wise, just keeping export)
+export async function generateLifestyleGuide(req: TravelRequest, settings: AppSettings): Promise<string> {
+  const effectiveKey = getEffectiveKey(settings);
+  if (!effectiveKey) throw new Error("Missing API Key");
+  
+  const isPlan = req.type === 'PLAN';
+  const budgetStr = { budget: '经济穷游', standard: '舒适标准', luxury: '豪华享受' }[req.budget];
+  const interestsStr = req.interests.join("、") || "大众经典";
+
+  const imageInstruction = `
+    请在每个主要推荐点后单独起一行，插入真实图片：
+    \`![{名称}](https://tse1.mm.bing.net/th?q={关键词}&w=800&h=450&c=7&rs=1&p=0)\`
+    其中{关键词}需替换为“中文具体名称+城市”。
+  `;
+
+  let prompt = "";
+  if (isPlan) {
+    prompt = `为去【${req.destination}】${req.duration}天${budgetStr}旅行制定攻略。兴趣：${interestsStr}。需包含每日行程、住宿、美食、避坑。${imageInstruction}`;
+  } else {
+    prompt = `整理【${req.destination}】的${budgetStr}美食指南。偏好：${interestsStr}。需包含必吃榜单、特色科普、排雷。${imageInstruction}`;
+  }
+
+  try {
+    if (['openai', 'deepseek', 'tongyi'].includes(settings.provider)) {
+        let text = await callOpenAICompatible(settings.baseUrl, effectiveKey, settings.model, [{role: 'user', content: prompt}]);
+        return text.replace(/<think>[\s\S]*?<\/think>/g, '');
+    } else {
+        const ai = getGeminiClient(effectiveKey);
+        const response = await ai.models.generateContent({
+          model: settings.model || 'gemini-2.0-flash',
+          contents: prompt,
+          config: { tools: [{ googleSearch: {} }] }
+        });
+        return response.text || "Failed";
     }
   } catch (e) {
-    console.error("Lifestyle API Error", e);
     throw e;
   }
 }

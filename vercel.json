@@ -1,8 +1,13 @@
+
 {
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    {
+      "source": "/api/dashscope/:match*",
+      "destination": "https://dashscope.aliyuncs.com/:match*"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
