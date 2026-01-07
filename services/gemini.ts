@@ -367,11 +367,11 @@ export async function generatePodcastScript(summary: string, settings: AppSettin
             return parsed;
         } else {
             console.error(`[Podcast] Parsed result is not an array.`);
-            return [{ speaker: "Kai", text: "生成脚本格式有误。" }];
+            return [{ speaker: "Kai", "text": "生成脚本格式有误。" }];
         }
     } catch (e) {
         console.error(`[Podcast] Script parsing error:`, e);
-        return [{ speaker: "Kai", text: "抱歉，无法生成对话。" }];
+        return [{ speaker: "Kai", "text": "抱歉，无法生成对话。" }];
     }
 }
 
@@ -454,14 +454,11 @@ async function generateGeminiAudio(script: PodcastSegment[], apiKey: string, mod
 async function generateTongyiAudio(script: PodcastSegment[], apiKey: string, modelName: string, onProgress?: (percent: number) => void): Promise<{ buffer: ArrayBuffer, mimeType: string }> {
     console.log(`[TTS] Starting Tongyi/DashScope TTS. Model: ${modelName}`);
     
-    // Determine Environment:
-    const isLocalhost = typeof window !== 'undefined' && 
-                        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    
-    const TARGET_API = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation";
-    
-    // 1. Try local proxy first if on localhost
-    let url = isLocalhost ? "/api/dashscope/api/v1/services/audio/tts/generation" : TARGET_API;
+    // API Endpoints
+    // PROXY_URL: Used by Vite dev server and Vercel rewrites to bypass CORS.
+    // DIRECT_URL: Direct Aliyun endpoint, will fail in browser unless allowed (usually blocked).
+    const PROXY_URL = "/api/dashscope/api/v1/services/audio/tts/generation";
+    const DIRECT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation";
     
     const MODEL_NAME = modelName || "qwen3-tts-flash"; 
 
@@ -530,20 +527,39 @@ async function generateTongyiAudio(script: PodcastSegment[], apiKey: string, mod
                 });
             };
 
-            console.log(`[TTS] Sending fetch request to ${url}...`);
-
+            // Multi-stage fetch strategy:
+            // 1. Try PROXY_URL (works in Dev & Vercel)
+            // 2. If 404 (means proxy not set up), try DIRECT_URL
+            // 3. If Network Error (CORS), try corsproxy.io
+            
             let response;
+            let usedUrl = PROXY_URL;
+            
             try {
-                response = await doFetch(url);
-            } catch (netError) {
-                console.warn(`[TTS] Primary fetch to ${url} failed. Trying CORS proxy fallback...`, netError);
-                // Fallback to CORS proxy
-                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(TARGET_API)}`;
+                // Attempt 1: Proxy/Rewrite
+                response = await doFetch(PROXY_URL);
+                if (response.status === 404) {
+                    console.warn(`[TTS] Proxy 404 (likely static host). Switching to Direct URL.`);
+                    throw new Error("Proxy404");
+                }
+            } catch (proxyErr: any) {
+                // Attempt 2: Direct
+                // If the error was 404 on proxy, or any network error, try direct
+                console.warn(`[TTS] Proxy fetch failed (${proxyErr.message}). Trying Direct URL...`);
+                usedUrl = DIRECT_URL;
                 try {
-                    response = await doFetch(proxyUrl);
-                } catch (proxyError) {
-                    // If proxy also fails, throw original error
-                    throw netError;
+                     response = await doFetch(DIRECT_URL);
+                } catch (directErr: any) {
+                     // Attempt 3: CORS Proxy
+                     console.warn(`[TTS] Direct fetch failed (${directErr.message}). Trying external CORS proxy...`);
+                     const corsProxyUrl = `https://corsproxy.io/?${encodeURIComponent(DIRECT_URL)}`;
+                     usedUrl = corsProxyUrl;
+                     try {
+                        response = await doFetch(corsProxyUrl);
+                     } catch (corsErr) {
+                         // All attempts failed
+                         throw directErr; // Throw the direct error as it's usually more descriptive
+                     }
                 }
             }
 
@@ -559,9 +575,6 @@ async function generateTongyiAudio(script: PodcastSegment[], apiKey: string, mod
                  } catch (e) {}
                  
                  if (i === 0) {
-                     if (response.status === 404) {
-                         throw new Error(`语音API路径未找到 (404)。可能是本地代理未生效。`);
-                     }
                      if (response.status === 401 || response.status === 403) {
                          throw new Error(`语音API鉴权失败。请检查通义千问 API Key。`);
                      }
@@ -632,24 +645,51 @@ async function generateTongyiAudio(script: PodcastSegment[], apiKey: string, mod
     return { buffer: combined.buffer, mimeType: 'audio/mp3' };
 }
 
-// 5. Main Audio Generation Facade
+// 5. Main Audio Generation Facade with Robust Fallback
 export async function generatePodcastAudio(script: PodcastSegment[], settings: AppSettings, onProgress?: (percent: number) => void): Promise<{ buffer: ArrayBuffer, mimeType: string }> {
     const tongyiKey = getTongyiKey(settings);
+    // Determine Gemini Key: if provider is gemini use user input, else try env var (as fallback)
     const geminiKey = settings.provider === 'gemini' ? (settings.apiKey || process.env.API_KEY) : process.env.API_KEY;
 
-    // Priority 1: Use Tongyi (Sambert/Qwen TTS) if Key is available.
+    let errorDetails = "";
+
+    // 1. Try Tongyi if configured
     if (tongyiKey) {
-        const model = settings.ttsModel && !settings.ttsModel.includes('gemini') ? settings.ttsModel : 'qwen3-tts-flash';
-        return await generateTongyiAudio(script, tongyiKey, model, onProgress);
+        try {
+            console.log("[TTS] Attempting Tongyi TTS...");
+            const model = settings.ttsModel && !settings.ttsModel.includes('gemini') ? settings.ttsModel : 'qwen3-tts-flash';
+            // Use callback mostly for Tongyi as it processes segments serially
+            return await generateTongyiAudio(script, tongyiKey, model, onProgress);
+        } catch (e: any) {
+            console.warn(`[TTS] Tongyi TTS failed (${e.message}). Switching to fallback...`);
+            errorDetails += `Tongyi Error: ${e.message}. `;
+            
+            // If we don't have a fallback key, rethrow immediately
+            if (!geminiKey) {
+                 throw new Error(`语音合成失败 (Tongyi): ${e.message}。且未配置 Gemini Key 作为备用。`);
+            }
+        }
     }
 
-    // Priority 2: Use Gemini Native TTS as fallback.
+    // 2. Fallback or Primary: Gemini
     if (geminiKey) {
-        const model = settings.ttsModel && settings.ttsModel.includes('gemini') ? settings.ttsModel : 'gemini-2.5-flash-preview-tts';
-        return await generateGeminiAudio(script, geminiKey, model);
+         try {
+            console.log("[TTS] Attempting Gemini TTS...");
+            if (onProgress) onProgress(10); // Fake progress start for Gemini
+            
+            const model = settings.ttsModel && settings.ttsModel.includes('gemini') ? settings.ttsModel : 'gemini-2.5-flash-preview-tts';
+            const result = await generateGeminiAudio(script, geminiKey, model);
+            
+            if (onProgress) onProgress(100);
+            return result;
+         } catch (e: any) {
+             console.error("[TTS] Gemini TTS failed", e);
+             errorDetails += `Gemini Error: ${e.message}`;
+             throw new Error(`语音生成失败。${errorDetails}`);
+         }
     }
     
-    throw new Error("未检测到语音服务 API Key。请配置通义千问 (DashScope) 或 Gemini API Key。");
+    throw new Error("未检测到可用的语音服务配置。请检查 API Key (通义千问 或 Gemini)。");
 }
 
 // 3. Generate Lifestyle Guide (No changes logic-wise, just keeping export)
